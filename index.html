@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:,">
+<title>Family Secret Santa</title>
+<style>
+:root{color-scheme:light;--ink:#233e35;--green:#285b48;--paper:#fbf8f1;--line:#dcded4;--red:#963f39}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.5 system-ui,sans-serif}main{max-width:820px;margin:auto;padding:32px 18px 70px}header{padding:12px 0 24px;border-bottom:1px solid var(--line)}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;color:var(--red)}h1{font-family:Georgia,serif;font-weight:normal;font-size:clamp(36px,7vw,54px);line-height:1.12;margin:12px 0}h2{font-size:24px;margin:0 0 10px}h3{font-size:19px;margin:0}p{margin:10px 0}section{margin-top:28px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:14px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.between{justify-content:space-between}.muted,small{color:#58685f;font-size:14px}label{display:block;font-size:14px;font-weight:650;margin:10px 0}input,select,textarea,button{font:inherit}input,select,textarea{display:block;width:100%;padding:12px;border:1px solid #aab8ae;border-radius:8px;color:var(--ink);background:#fff;margin-top:5px}textarea{min-height:100px;resize:vertical}button{min-height:46px;padding:10px 17px;border:1px solid var(--green);border-radius:8px;color:var(--green);background:white;cursor:pointer;font-weight:650}button.primary{background:var(--green);color:#fff}button.danger{color:var(--red);border-color:#d1a9a5}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #ba8c3e;outline-offset:3px}.member{border-top:1px solid var(--line);padding:12px 0;display:grid;grid-template-columns:2fr 1fr;gap:0 12px}.member .contact{grid-column:1/-1}.member button{justify-self:start}#error{color:var(--red);font-weight:650}#status{min-height:24px}.reveal{max-width:570px;margin:9vh auto;text-align:center;padding:35px 24px}.reveal h1{font-size:46px;overflow-wrap:anywhere}.reveal ul{text-align:left;padding-left:24px}.reveal li{padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.sent{color:var(--green);font-weight:700}#json{font:13px/1.5 ui-monospace,monospace;min-height:180px}[hidden]{display:none!important}@media(min-width:640px){.member{grid-template-columns:2fr 1fr 2fr auto;align-items:end}.member .contact{grid-column:auto}.member button{margin-bottom:10px}}
+</style>
+</head>
+<body><main id="app"></main>
+<script id="draw-logic">
+// Pure draw function. Inject a seeded random function in tests.
+function drawPeople(people, random = Math.random, retries = 200) {
+  const fail = error => ({error});
+  if (!Array.isArray(people) || !people.length) return fail('Add people before drawing.');
+  const names = new Set();
+  for (const p of people) {
+    if (!p.name || !p.name.trim() || !p.household || !['Adult','Kid'].includes(p.type)) return fail('Give every person a name, household and type.');
+    const key = p.name.trim().toLocaleLowerCase();
+    if (names.has(key)) return fail('Each person needs a unique name: ' + p.name + '.');
+    names.add(key);
+  }
+  const assignments = [];
+  const shuffle = values => {
+    const a = [...values];
+    for (let i=a.length-1;i>0;i--) { const j=Math.floor(random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+    return a;
+  };
+  for (const type of ['Adult','Kid']) {
+    const pool = people.filter(p=>p.type===type);
+    if (!pool.length) continue;
+    if (pool.length<2) return fail(type+' pool has only one person. Add someone from another household, or remove this pool.');
+    const counts = new Map();
+    pool.forEach(p=>counts.set(p.household,(counts.get(p.household)||0)+1));
+    for (const [household,count] of counts) if (count>pool.length/2) return fail(type+' pool cannot be drawn: '+household+' has '+count+' of '+pool.length+' people, more than half. Add people from other households.');
+    let recipients;
+    for (let n=0;n<retries;n++) {
+      const candidate=shuffle(pool);
+      if (candidate.every((p,i)=>p.household!==pool[i].household)) { recipients=candidate; break; }
+    }
+    if (!recipients) {
+      const candidates=pool.map(p=>shuffle(pool.map((_,i)=>i).filter(i=>pool[i].household!==p.household)));
+      const used=new Set(), chosen=Array(pool.length);
+      function search(depth) {
+        if (depth===pool.length) return true;
+        let giver=-1, options;
+        for(let i=0;i<pool.length;i++) if(chosen[i]===undefined) {
+          const available=candidates[i].filter(j=>!used.has(j));
+          if(!available.length) return false;
+          if(!options || available.length<options.length) {giver=i;options=available;}
+        }
+        for(const receiver of options) {
+          chosen[giver]=receiver; used.add(receiver);
+          if(search(depth+1)) return true;
+          used.delete(receiver); chosen[giver]=undefined;
+        }
+        return false;
+      }
+      if(!search(0)) return fail(type+' pool has no valid draw. Check the households.');
+      recipients=chosen.map(i=>pool[i]);
+    }
+    pool.forEach((giver,i)=>assignments.push({giver:giver.name,receiver:recipients[i].name}));
+  }
+  return {assignments};
+}
+</script>
+<script>
+'use strict';
+const app=document.getElementById('app');
+const adultDefault='Hi {name}, here is your private Secret Santa link: {link}  Please keep it to yourself!';
+const kidDefault="Hi {name}, this link is for {kid}'s Secret Santa: {link}  Please keep it a surprise!";
+let households=[], matches=null, drawCode='', sent=new Set(), wishes={}, fetched={}, loadFailed=false, counter=0, routeVersion=0;
+let adultMessage=adultDefault,kidMessage=kidDefault;
+const el=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
+const button=(text,action,cls)=>{const b=el('button',text,cls);b.type='button';b.onclick=action;return b;};
+const slug=name=>name.trim().normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-|-$/g,'');
+const people=()=>households.flatMap(h=>h.members.map(p=>({...p,household:h.name.trim(),householdId:h.id,name:p.name.trim()})));
+function field(label,value,oninput,tag='input') {const l=el('label',label),i=el(tag);i.value=value;i.autocomplete='off';i.oninput=()=>oninput(i.value);l.append(i);return l;}
+function selectField(label,options,value,change){const l=el('label',label),s=el('select');s.setAttribute('aria-label',label);options.forEach(([v,t])=>{const o=el('option',t);o.value=v;s.append(o);});s.value=value;s.onchange=()=>change(s.value);l.append(s);return l;}
+function encode(data){return btoa(Array.from(new TextEncoder().encode(JSON.stringify(data)),x=>String.fromCharCode(x)).join('')).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function decode(payload){if(!/^[A-Za-z0-9_-]+$/.test(payload)||payload.length>12000)throw Error();const raw=payload.replace(/-/g,'+').replace(/_/g,'/');return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(atob(raw),c=>c.charCodeAt(0))));}
+async function fetchWishes(){try{const r=await fetch('./wishlists.json?t='+Date.now(),{cache:'no-store',credentials:'omit',redirect:'error'});if(!r.ok)throw Error();const j=await r.json();if(!j.people||typeof j.people!=='object'||Array.isArray(j.people))throw Error();return j.people;}catch{return null;}}
+function ideasFor(data,id){const entry=Object.hasOwn(data,id)?data[id]:null;return entry&&Array.isArray(entry.ideas)?entry.ideas.filter(x=>typeof x==='string'):[];}
+function wishText(p){return Object.hasOwn(wishes,p.id)?wishes[p.id]:ideasFor(fetched,slug(p.name)).join('\n');}
+function note(text){const n=document.getElementById('status');if(n)n.textContent=text;}
+async function copy(text){try{await navigator.clipboard.writeText(text);note('Copied.');}catch{const t=el('textarea');t.value=text;t.setAttribute('aria-label','Select and copy this text');app.append(t);t.focus();t.select();note('Copy is unavailable here. Select and copy the text below.');}}
+function addHouse(){households.push({id:++counter,name:'',members:[{id:++counter,name:'',type:'Adult',contact:'',parent:''}]});renderSetup();}
+function renderSetup(){const box=document.getElementById('households');box.replaceChildren();for(const h of households){const card=el('div',undefined,'card');card.append(field('Household name',h.name,v=>h.name=v),button('Remove household',()=>{households=households.filter(x=>x!==h);renderSetup();renderWishes();},'danger'));for(const p of h.members){const row=el('div',undefined,'member');row.append(field('Name',p.name,v=>{p.name=v;renderWishes();}),selectField('Type',[['Adult','Adult'],['Kid','Kid']],p.type,v=>{p.type=v;renderSetup();}),field('Phone or email (optional)',p.contact,v=>p.contact=v),button('Remove',()=>{h.members=h.members.filter(x=>x!==p);renderSetup();renderWishes();},'danger'));row.children[2].classList.add('contact');row.querySelector('button').setAttribute('aria-label','Remove '+(p.name||'person'));card.append(row);}card.append(button('Add person',()=>{h.members.push({id:++counter,name:'',type:'Adult',contact:'',parent:''});renderSetup();}));box.append(card);}}
+function renderWishes(){const box=document.getElementById('wishboxes');if(!box)return;box.replaceChildren();for(const p of people().filter(p=>p.name)){box.append(field(p.name,wishText(p),v=>wishes[p.id]=v,'textarea'));}}
+function validate(){const ps=people();if(households.some(h=>!h.name.trim()||!h.members.length))return 'Give each household a name and at least one person.';if(new Set(households.map(h=>h.name.trim().toLowerCase())).size!==households.length)return 'Use a different name for each household.';const ids=ps.map(p=>slug(p.name));if(ids.some(id=>!id))return 'Use a name containing letters or numbers for every person.';if(new Set(ids).size!==ids.length)return 'Two names make the same wish list ID. Give each person a more distinct name.';return '';}
+function draw(){if(matches&&!confirm('Old links will still show old matches. Make sure everyone uses only the newest link.'))return;const error=document.getElementById('error');const validation=validate();if(validation){error.textContent=validation;return;}const result=drawPeople(people());if(result.error){error.textContent=result.error;return;}error.textContent='';matches=result.assignments;const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let code;do{code=Array.from(crypto.getRandomValues(new Uint8Array(4)),b=>alphabet[b%32]).join('');}while(code===drawCode);drawCode=code;sent.clear();document.getElementById('setupfields').disabled=true;document.getElementById('draw').textContent='Re-draw';document.getElementById('delivery').hidden=false;renderDelivery();}
+function linkFor(p){const match=matches.find(m=>m.giver===p.name);return location.origin+location.pathname+'#/r/'+encode({g:p.name,r:match.receiver,rid:slug(match.receiver),k:p.type==='Kid'?p.name:'',d:drawCode});}
+function renderDelivery(){const box=document.getElementById('sendrows');box.replaceChildren();document.getElementById('progress').textContent='Draw '+drawCode+': '+sent.size+' of '+people().length+' marked sent.';for(const p of people()){const card=el('div',undefined,'card'),head=el('div',undefined,'row between');head.append(el('h3',p.name),el('span',sent.has(p.id)?'✓ Sent':'Not sent',sent.has(p.id)?'sent':'muted'));card.append(head);let contact=p.contact,recipient=p.name;if(p.type==='Kid'){const adults=people().filter(a=>a.householdId===p.householdId&&a.type==='Adult'&&a.contact.trim());const original=households.flatMap(h=>h.members).find(x=>x.id===p.id);let chosen=adults.find(a=>String(a.id)===String(original.parent))||adults[0];original.parent=chosen?String(chosen.id):'';card.append(selectField('Send to',[['','Choose an adult'],...adults.map(a=>[String(a.id),a.name])],original.parent,v=>{original.parent=v;renderDelivery();}));contact=chosen?.contact||'';recipient=chosen?.name||'';}
+const email=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.trim()),phone=/^\+?[\d\s().-]{3,}$/.test(contact.trim());const link=linkFor(p);const message=(p.type==='Kid'?kidMessage:adultMessage).replace(/\{(name|link|kid)\}/g,(_,key)=>({name:recipient,link,kid:p.type==='Kid'?p.name:''})[key]);const send=kind=>{sent.add(p.id);renderDelivery();location.href=kind==='sms'?'sms:'+contact.replace(/[^+\d]/g,'')+'?&body='+encodeURIComponent(message):'mailto:'+encodeURIComponent(contact.trim())+'?subject='+encodeURIComponent('Your Secret Santa link')+'&body='+encodeURIComponent(message);};const row=el('div',undefined,'row');const sms=button('Text',()=>send('sms')),mail=button('Email',()=>send('email'));sms.disabled=!phone;mail.disabled=!email;row.append(sms,mail,button('Copy link',()=>copy(link)),button(sent.has(p.id)?'Mark unsent':'Mark sent',()=>{sent.has(p.id)?sent.delete(p.id):sent.add(p.id);renderDelivery();}));card.append(row,el('p',!phone&&!email?'Add a valid phone or email contact'+(p.type==='Kid'?' for an adult in this household':'')+'. Copy link also works.':phone?'Text is available for this phone number.':'Email is available for this address.','muted'));card.append(field('Delivery contact',contact,v=>{const original=households.flatMap(h=>h.members).find(x=>x.id===(p.type==='Kid'?Number(households.flatMap(h=>h.members).find(x=>x.id===p.id).parent):p.id));if(original)original.contact=v;}));card.lastChild.querySelector('input').onchange=()=>renderDelivery();if(p.type==='Kid'&&!households.flatMap(h=>h.members).find(x=>x.id===p.id).parent)card.lastChild.hidden=true;box.append(card);}}
+function organizer(){app.innerHTML='<header><div class="eyebrow">A little family magic</div><h1>Secret Santa</h1><p>One gift to give. One surprise to keep.</p><p class="muted">Names, contacts and draws stay in this tab only. Refreshing or closing clears them.</p></header><section><h2>1. Bring everyone together</h2><p class="muted">Adults draw adults. Kids draw kids. Nobody draws their own household.</p><fieldset id="setupfields" style="border:0;padding:0;margin:0"><div id="households"></div><button type="button" id="addhouse">Add household</button></fieldset></section><section><h2>2. Make the draw</h2><p class="muted">Matches stay hidden here, so you can join in too. People are locked after drawing. Clear everything to start a different group.</p><p id="error" role="alert"></p><button type="button" id="draw" class="primary">Draw names</button></section><section id="delivery" hidden><h2>3. Pass on the surprise</h2><p id="progress" class="muted"></p><p class="muted">Opening Text or Email marks a link sent. Finish sending in your messaging app. For copied links, mark sent after sharing.</p><details><summary>Edit messages for everyone</summary><div id="messages"></div><p class="muted">Use {name}, {link} and {kid}. Keep {link} so people can open their match.</p></details><div id="sendrows"></div></section><section><h2>Wish lists</h2><p class="muted">Optional, one idea per line. Published names and ideas are public. Never add contacts or private information.</p><p id="loadnote" class="muted"></p><div id="wishboxes"></div><button type="button" id="generate">Generate wishlists.json</button><label>Full file contents<textarea id="json" readonly></textarea></label><button type="button" id="copyjson">Copy</button><p class="muted">Paste this into wishlists.json on GitHub and commit. Changes go live in a minute or two.</p></section><section><button type="button" id="clear" class="danger">Clear everything</button><p id="status" role="status" aria-live="polite"></p></section>';
+document.getElementById('addhouse').onclick=addHouse;document.getElementById('draw').onclick=draw;document.getElementById('messages').append(field('Adult message',adultMessage,v=>{adultMessage=v;renderDelivery();},'textarea'),field('Kid message',kidMessage,v=>{kidMessage=v;renderDelivery();},'textarea'));document.getElementById('generate').onclick=()=>{const error=validate();if(error){note(error);return;}const data={people:Object.create(null)};for(const p of people())data.people[slug(p.name)]={name:p.name,ideas:wishText(p).split('\n').map(s=>s.trim()).filter(Boolean)};document.getElementById('json').value=JSON.stringify(data,null,2);note('Wish list file is ready.');};document.getElementById('copyjson').onclick=()=>{const value=document.getElementById('json').value;if(value)copy(value);else note('Generate the file first.');};document.getElementById('clear').onclick=()=>{if(!confirm('Clear all people, contacts, wish list edits and links from this tab? Old links will still work.'))return;routeVersion++;households=[];matches=null;drawCode='';sent.clear();wishes={};fetched={};loadFailed=false;adultMessage=adultDefault;kidMessage=kidDefault;organizer();};renderSetup();renderWishes();document.getElementById('loadnote').textContent=loadFailed?'Saved wish lists could not be loaded. You can still enter ideas here.':'';if(matches){document.getElementById('setupfields').disabled=true;document.getElementById('draw').textContent='Re-draw';document.getElementById('delivery').hidden=false;renderDelivery();}}
+async function route(){const version=++routeVersion;if(location.hash){app.replaceChildren();let data;try{if(!location.hash.startsWith('#/r/'))throw Error();data=decode(location.hash.slice(4));if(!data||!['g','r','rid','k','d'].every(k=>typeof data[k]==='string')||!data.g.trim()||!data.r.trim()||data.rid!==slug(data.r)||!data.rid||!/^[A-Z0-9]{4}$/.test(data.d)||(data.k&&data.k!==data.g))throw Error();}catch{app.append(el('div','This link looks broken, ask the organizer for a new one.','card reveal'));return;}const card=el('div',undefined,'card reveal');card.append(el('div','A surprise just for you','eyebrow'),el('p',data.k?data.k+' drew':'You drew'),el('h1',data.r),el('p','A few ideas for their gift','muted'));const list=el('div','Loading ideas…');card.append(list,el('small','Draw code: '+data.d));app.append(card);const fresh=await fetchWishes();if(version!==routeVersion)return;const ideas=ideasFor(fresh||{},data.rid);list.replaceChildren();if(ideas.length){const ul=el('ul');ideas.forEach(idea=>ul.append(el('li',idea)));list.append(ul);}else list.append(el('p',fresh?'No ideas yet. Check back later, this page updates.':'Ideas could not be loaded. Try reopening this link later.'));}else{organizer();const fresh=await fetchWishes();if(version!==routeVersion)return;fetched=fresh||{};loadFailed=!fresh;renderWishes();document.getElementById('loadnote').textContent=loadFailed?'Saved wish lists could not be loaded. You can still enter ideas here.':'';}}
+window.addEventListener('hashchange',route);window.addEventListener('beforeunload',e=>{if(matches&&sent.size<people().length){e.preventDefault();e.returnValue='';}});route();
+</script></body></html>
