@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.1 (2026-11-18)
+
+- Reload published ideas after clearing setup and block exports until the load completes.
+- Keep draft ideas attached to the person during renames, including temporarily blank names.
+- Preserve published names for old recipient links and reject renames into another saved person.
+- Block export after a failed load; allow a new file only after an explicit replacement confirmation.
+- Invalidate prepared files on reload and ignore superseded network responses.
+- Use stable error codes instead of matching user-facing error text.
+- Provide separate update and fresh-install archives; updates exclude wishlists.json.
+- Check version consistency across app metadata, footer, README and changelog.
+
+Validation: 26 dependency-free Node tests passed, including clear and reload, rename,
+failed load and retry, explicit reset, and overlapping responses. No screen or audio
+access was used. Real iOS and Android messaging and live deployment remain unverified.
+
 ## 1.1.0 (2026-11-15)
 
 - Organize the exchange around People, Draw and Send; collapse household setup after drawing.

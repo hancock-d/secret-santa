@@ -18,11 +18,12 @@ test('all small household distributions agree with feasibility rule',()=>{for(le
 
 // Run the actual wish list click handler with a minimal document surface.
 function wishEditor(setup) {
-  const nodes=Object.fromEntries(['app','wishoutput','json','wishstatus'].map(id=>[id,{hidden:true,value:'',textContent:''}]));
-  const context=vm.createContext({document:{getElementById:id=>nodes[id]},window:{addEventListener(){}}});
+  const nodes=Object.fromEntries(['app','wishoutput','json','wishstatus','loadnote','retry','freshchoice','generate'].map(id=>[id,{hidden:true,value:'',textContent:''}]));
+  const context=vm.createContext({document:{getElementById:id=>nodes[id]},window:{addEventListener(){}},confirm:()=>true});
   const scripts=[...html.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
   vm.runInContext(scripts[0],context);
   vm.runInContext(scripts[1].replace(/route\(\);\s*$/,''),context);
+  vm.runInContext('sourceReady=true;',context);
   vm.runInContext(setup,context);
   vm.runInContext('generateWishlists()',context);
   return {nodes,context};
@@ -94,4 +95,81 @@ test('opening a message never marks it sent',()=>{
   vm.runInContext(`location={origin:'https://example.com',pathname:'/santa/'};linkFor=()=> 'https://example.com/#/r/test';renderDelivery=()=>{};openMessage(people()[0],people()[0]);`,context);
   assert.equal(vm.runInContext('sent.size',context),0);
   assert.equal(vm.runInContext('opened.has(2)',context),true);
+});
+
+test('renaming a person preserves their draft through a blank name',()=>{
+  const {context}=wishEditor(`households=[{id:1,name:'North',members:[{id:2,name:'Alex'}]}];editIdeas('Alex','Books');`);
+  vm.runInContext(`renamePerson(originalPerson(2),'');renamePerson(originalPerson(2),'Alexander');`,context);
+  const result=JSON.parse(vm.runInContext('JSON.stringify(wishResult().data)',context));
+  assert.deepEqual(result.people.alexander.ideas,['Books']);
+});
+test('entering an existing name character by character loads saved ideas',()=>{
+  const {context}=wishEditor(`fetched={alex:{name:'Alex',ideas:['Saved']}};households=[{id:1,name:'North',members:[{id:2,name:''}]}];`);
+  vm.runInContext(`for(const name of ['A','Al','Ale','Alex'])renamePerson(originalPerson(2),name);`,context);
+  assert.equal(vm.runInContext(`wishText('Alex')`,context),'Saved');
+});
+test('renamed published people retain old link ideas and new name drafts',()=>{
+  const {context}=wishEditor(`fetched={alex:{name:'Alex',ideas:['Saved']}};households=[{id:1,name:'North',members:[{id:2,name:'Alex'}]}];`);
+  vm.runInContext(`renamePerson(originalPerson(2),'Alexander');editIdeas('Alexander','New ideas');`,context);
+  const result=JSON.parse(vm.runInContext('JSON.stringify(wishResult().data)',context));
+  assert.deepEqual(result.people.alex.ideas,['Saved']);
+  assert.deepEqual(result.people.alexander.ideas,['New ideas']);
+});
+test('clear reloads published lists before permitting an export',async()=>{
+  const {context,nodes}=wishEditor(`fetched={blair:{name:'Blair',ideas:['Keep']}};`);
+  vm.runInContext(`organizer=()=>{};fetchWishes=()=>new Promise(resolve=>{globalThis.finishLoad=resolve;});`,context);
+  const clearing=vm.runInContext('clearAll()',context);
+  vm.runInContext(`extraNames=['Alex'];generateWishlists();`,context);
+  assert.equal(nodes.json.value,'');assert.match(nodes.wishstatus.textContent,/loading/);
+  vm.runInContext(`finishLoad({blair:{name:'Blair',ideas:['Keep']}});`,context);
+  await clearing;
+  vm.runInContext('generateWishlists()',context);
+  assert.deepEqual(JSON.parse(nodes.json.value).people.blair.ideas,['Keep']);
+});
+test('failed load blocks export and successful retry preserves unrelated people',async()=>{
+  const {context,nodes}=wishEditor(`extraNames=['Alex'];editIdeas('Alex','Books');`);
+  vm.runInContext('fetchWishes=async()=>null;',context);
+  await vm.runInContext('loadSavedWishes()',context);
+  vm.runInContext('generateWishlists()',context);
+  assert.equal(nodes.json.value,'');assert.equal(nodes.wishoutput.hidden,true);
+  assert.match(nodes.wishstatus.textContent,/Load saved ideas/);
+  vm.runInContext(`fetchWishes=async()=>({blair:{name:'Blair',ideas:['Keep']}});`,context);
+  await vm.runInContext('loadSavedWishes()',context);
+  vm.runInContext('generateWishlists()',context);
+  const data=JSON.parse(nodes.json.value);
+  assert.deepEqual(data.people.alex.ideas,['Books']);assert.deepEqual(data.people.blair.ideas,['Keep']);
+});
+test('new-file mode requires confirmation and invalidates outstanding loads',async()=>{
+  const {context,nodes}=wishEditor(`extraNames=['Alex'];sourceReady=false;loadFailed=true;`);
+  vm.runInContext('confirm=()=>false;startNewWishFile();generateWishlists();',context);
+  assert.equal(nodes.json.value,'');
+  vm.runInContext(`fetchWishes=()=>new Promise(resolve=>{globalThis.finishLoad=resolve;});`,context);
+  const loading=vm.runInContext('loadSavedWishes()',context);
+  vm.runInContext('confirm=()=>true;startNewWishFile();generateWishlists();',context);
+  assert.deepEqual(Object.keys(JSON.parse(nodes.json.value).people),['alex']);
+  assert.match(nodes.wishstatus.textContent,/replace all/);
+  vm.runInContext(`finishLoad({blair:{name:'Blair',ideas:['Old']}});`,context);
+  await loading;
+  assert.equal(vm.runInContext('newWishFile && sourceReady',context),true);
+  assert.equal(vm.runInContext('Object.keys(fetched).length',context),0);
+});
+test('later load wins over an older response',async()=>{
+  const {context}=wishEditor(`fetchWishes=()=>new Promise(resolve=>{(globalThis.pending??=[]).push(resolve);});`);
+  const first=vm.runInContext('loadSavedWishes()',context);
+  const second=vm.runInContext('loadSavedWishes()',context);
+  vm.runInContext(`pending[1]({blair:{name:'Blair',ideas:['New']}});`,context);await second;
+  vm.runInContext(`pending[0]({blair:{name:'Blair',ideas:['Old']}});`,context);await first;
+  assert.equal(vm.runInContext('fetched.blair.ideas[0]',context),'New');
+});
+
+test('renaming into another published person cannot overwrite their ideas',()=>{
+  const {context}=wishEditor(`fetched={blair:{name:'Blair',ideas:['Keep']}};households=[{id:1,name:'North',members:[{id:2,name:'Alex'}]}];editIdeas('Alex','Books');`);
+  vm.runInContext(`renamePerson(originalPerson(2),'Blair');`,context);
+  assert.equal(vm.runInContext('wishResult().code',context),'RENAME_CONFLICT');
+});
+test('release version is consistent across app metadata, footer, README and changelog',()=>{
+  const version=html.match(/const VERSION = '([^']+)'/)[1];
+  assert.ok(html.includes(`name="application-version" content="${version}"`));
+  assert.ok(readFileSync(new URL('../README.md',import.meta.url),'utf8').startsWith(`# Family Secret Santa v${version}\n`));
+  assert.ok(readFileSync(new URL('../CHANGELOG.md',import.meta.url),'utf8').includes(`## ${version} (`));
 });

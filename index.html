@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="data:,">
-<meta name="application-version" content="1.1.0">
+<meta name="application-version" content="1.1.1">
 <title>Family Secret Santa</title>
 <style>
 :root{color-scheme:light;--ink:#233e35;--green:#285b48;--paper:#fbf8f1;--line:#dcded4;--red:#963f39}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.5 system-ui,sans-serif}main{max-width:820px;margin:auto;padding:32px 18px 70px}header{padding:12px 0 24px;border-bottom:1px solid var(--line)}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;color:var(--red)}h1{font-family:Georgia,serif;font-weight:normal;font-size:clamp(36px,7vw,54px);line-height:1.12;margin:12px 0}h2{font-size:24px;margin:0 0 10px}h3{font-size:19px;margin:0}p{margin:10px 0}section{margin-top:28px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:14px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.between{justify-content:space-between}.muted,small{color:#58685f;font-size:14px}label{display:block;font-size:14px;font-weight:650;margin:10px 0}input,select,textarea,button{font:inherit}input,select,textarea{display:block;width:100%;padding:12px;border:1px solid #aab8ae;border-radius:8px;color:var(--ink);background:#fff;margin-top:5px}textarea{min-height:100px;resize:vertical}button{min-height:46px;padding:10px 17px;border:1px solid var(--green);border-radius:8px;color:var(--green);background:white;cursor:pointer;font-weight:650}button.primary{background:var(--green);color:#fff}button.danger{color:var(--red);border-color:#d1a9a5}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #ba8c3e;outline-offset:3px}.member{border-top:1px solid var(--line);padding:12px 0;display:grid;grid-template-columns:2fr 1fr;gap:0 12px}.member .contact{grid-column:1/-1}.member button{justify-self:start}#error{color:var(--red);font-weight:650}#status{min-height:24px}.reveal{max-width:570px;margin:9vh auto;text-align:center;padding:35px 24px}.reveal h1{font-size:46px;overflow-wrap:anywhere}.reveal ul{text-align:left;padding-left:24px}.reveal li{padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.sent{color:var(--green);font-weight:700}#json{font:13px/1.5 ui-monospace,monospace;min-height:180px}[hidden]{display:none!important}@media(min-width:640px){.member{grid-template-columns:2fr 1fr 2fr auto;align-items:end}.member .contact{grid-column:auto}.member button{margin-bottom:10px}}
@@ -80,14 +80,14 @@ function buildWishlists(entries, existing = {}) {
   }
   for (const p of entries.filter(p => p.name.trim())) {
     const name = p.name.trim(), id = slug(name);
-    if (!id) return {error: 'Use letters or numbers in the name "' + name + '".'};
-    if (seen.has(id)) return {error: 'Two people have names that are too similar: "' + name + '". Make their names distinct.'};
+    if (!id) return {code: 'INVALID_NAME', error: 'Use letters or numbers in the name "' + name + '".'};
+    if (seen.has(id)) return {code: 'DUPLICATE_NAME', error: 'Two people have names that are too similar: "' + name + '". Make their names distinct.'};
     if (data.people[id] && data.people[id].name.trim().toLowerCase() !== name.toLowerCase())
-      return {error: 'The name "' + name + '" conflicts with the saved name "' + data.people[id].name + '". Use the saved name or a distinct name.'};
+      return {code: 'SAVED_NAME_CONFLICT', error: 'The name "' + name + '" conflicts with the saved name "' + data.people[id].name + '". Use the saved name or a distinct name.'};
     seen.add(id);
     data.people[id] = {name, ideas: p.ideas.split('\n').map(s => s.trim()).filter(Boolean)};
   }
-  if (!Object.keys(data.people).length) return {error: 'Add at least one person above or in Gift ideas.'};
+  if (!Object.keys(data.people).length) return {code: 'NO_PEOPLE', error: 'Add at least one person above or in Gift ideas.'};
   return {data};
 }
 function contactKind(contact) {
@@ -109,13 +109,15 @@ function deliveryUrl(contact, message) {
 </script>
 <script>
 'use strict';
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const app = document.getElementById('app');
 const adultDefault = 'Hi {name}, here is your private Secret Santa link: {link}  Please keep it to yourself!';
 const kidDefault = "Hi {name}, this link is for {kid}'s Secret Santa: {link}  Please keep it a surprise!";
 let households = [], matches = null, drawCode = '', counter = 0, routeVersion = 0;
 let sent = new Set(), opened = new Set(), fetched = {}, wishes = Object.create(null), extraNames = [];
 let loadFailed = false, loading = false, ideasDirty = false, prepared = '', hadPrepared = false;
+// An export needs either a successfully loaded file or an explicit fresh-file choice.
+let sourceReady = false, newWishFile = false, loadRequest = 0;
 let adultMessage = adultDefault, kidMessage = kidDefault;
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => {
@@ -159,6 +161,8 @@ async function fetchWishes() {
 function ideasFor(data,id) {return Object.hasOwn(data,id) ? data[id].ideas : [];}
 function wishText(name) {
   const id = slug(name);
+  const person = people().find(p => slug(p.name) === id && Object.hasOwn(p,'giftDraft'));
+  if (person) return person.giftDraft;
   return Object.hasOwn(wishes,id) ? wishes[id] : ideasFor(fetched,id).join('\n');
 }
 function note(text) {if ($('status')) $('status').textContent = text;}
@@ -168,6 +172,21 @@ async function copy(text, statusId = 'status') {
     const t = el('textarea'); t.value = text; t.setAttribute('aria-label','Select and copy this text');
     $(statusId).after(t); t.focus(); t.select(); $(statusId).textContent = 'Select and copy the text below.';
   }
+}
+function renamePerson(person, name) {
+  // Keep drafts on the person's stable in-memory ID, even while their name is blank.
+  if (!Object.hasOwn(person,'giftDraft') && (Object.hasOwn(wishes,slug(person.name)) || Object.hasOwn(fetched,slug(person.name)))) {
+    person.giftDraft=wishText(person.name); person.giftOrigin=slug(person.name);
+  }
+  const previous=person.name;
+  person.name=name;
+  if(previous!==name && person.giftDraft) ideasDirty=true;
+  invalidateWishOutput();
+}
+function editIdeas(name, value) {
+  wishes[slug(name)]=value;
+  for(const p of households.flatMap(h=>h.members)) if(slug(p.name)===slug(name)) {p.giftDraft=value; if(!p.giftOrigin)p.giftOrigin=slug(name);}
+  ideasDirty=true; invalidateWishOutput();
 }
 function newMember() {return {id:++counter,name:'',type:'Adult',contact:'',parent:''};}
 function addHouse() {households.push({id:++counter,name:'',members:[newMember()]}); renderSetup();}
@@ -180,7 +199,9 @@ function renderSetup() {
     },'danger'));
     for (const p of h.members) {
       const row = el('div',undefined,'member');
-      row.append(field('Name',p.name,v=>{p.name=v;invalidateWishOutput();renderWishes();}),
+      const nameField=field('Name',p.name,()=>{});
+      nameField.querySelector('input').onchange=event=>{renamePerson(p,event.target.value);renderWishes();};
+      row.append(nameField,
         selectField('Type',[['Adult','Adult'],['Kid','Kid']],p.type,v=>{p.type=v;renderSetup();}),
         field(p.type==='Kid'?'Contact comes from an adult':'Phone or email (optional)',p.contact,v=>p.contact=v),
         button('Remove',()=>{h.members=h.members.filter(x=>x!==p);invalidateWishOutput();renderSetup();renderWishes();},'danger'));
@@ -210,25 +231,28 @@ function renderWishes() {
   const names=giftNames();
   if (!names.length) box.append(el('p','Add a person below or enter people in step 1.','muted'));
   for (const name of names) box.append(field('Gift ideas for '+name,wishText(name),v=>{
-    wishes[slug(name)]=v; ideasDirty=true; invalidateWishOutput();
+    editIdeas(name,v);
   },'textarea'));
 }
 function wishResult() {
+  const conflict=people().find(p=>p.giftOrigin && p.giftOrigin!==slug(p.name) && Object.hasOwn(fetched,slug(p.name)));
+  if(conflict)return {code:'RENAME_CONFLICT',error:'The name '+conflict.name+' already has a published list. Choose a distinct name to keep both lists.'};
   // Validate setup names separately because the editor intentionally displays one box per ID.
   const check=buildWishlists([...people().map(p=>({name:p.name,ideas:wishText(p.name)})),...extraNames.filter(name=>!people().some(p=>slug(p.name)===slug(name))).map(name=>({name,ideas:wishText(name)}))],fetched);
-  if (check.error && !/Add at least/.test(check.error)) return check;
+  if (check.error && check.code!=='NO_PEOPLE') return check;
   return buildWishlists(giftNames().map(name=>({name,ideas:wishText(name)})),fetched);
 }
 function generateWishlists() {
   invalidateWishOutput();
   if (loading) {$('wishstatus').textContent='Saved ideas are still loading. Try again in a moment.'; return;}
+  if (!sourceReady) {$('wishstatus').textContent='Load saved ideas before preparing an update, or explicitly start a new wish list file below.'; return;}
   const result=wishResult();
   if (result.error) {$('wishstatus').textContent=result.error; return;}
   prepared=JSON.stringify(result.data,null,2); hadPrepared=true;
   ideasDirty=ideasDirty || prepared!==JSON.stringify(buildWishlists([],fetched).data,null,2);
   $('json').value=prepared; $('wishoutput').hidden=false;
-  $('wishstatus').textContent=loadFailed
-    ? 'Update ready, but saved ideas could not be loaded. Check the file on GitHub before replacing it so other lists are not lost.'
+  $('wishstatus').textContent=newWishFile
+    ? 'New file ready. Uploading this file will replace all published gift ideas with the people shown here.'
     : 'Update ready. Download the file, then upload it to GitHub.';
 }
 function downloadWishes() {
@@ -236,11 +260,13 @@ function downloadWishes() {
   const url=URL.createObjectURL(new Blob([prepared+'\n'],{type:'application/json'}));
   const a=el('a'); a.href=url; a.download='wishlists.json'; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
-  $('wishstatus').textContent='Download requested. Upload wishlists.json to GitHub and commit to publish your ideas.';
+  $('wishstatus').textContent=newWishFile ? 'New file downloaded. Uploading it replaces all published gift ideas.' : 'Download requested. Upload wishlists.json to GitHub and commit to publish your ideas.';
 }
 function markUploaded() {
   if (!prepared) return;
   fetched=JSON.parse(prepared).people; ideasDirty=false; wishes=Object.create(null); extraNames=[];
+  for(const p of households.flatMap(h=>h.members)) {delete p.giftDraft;delete p.giftOrigin;}
+  newWishFile=false;
   $('wishstatus').textContent='Marked as uploaded. Reopen a recipient link after deployment to check the ideas.';
 }
 function needsWarning() {return ideasDirty || Boolean(matches && sent.size<people().length);}
@@ -310,10 +336,12 @@ function renderDelivery() {
     box.append(card);
   }
 }
-function clearAll() {
+async function clearAll() {
   if(!confirm('Clear all people, contacts, links and unpublished idea edits from this tab? Published ideas and old links will still work.')) return;
-  routeVersion++; households=[];matches=null;drawCode='';sent.clear();opened.clear();wishes=Object.create(null);extraNames=[];fetched={};
+  routeVersion++; households=[];matches=null;drawCode='';sent.clear();opened.clear();wishes=Object.create(null);extraNames=[];
+  sourceReady=false;newWishFile=false;
   ideasDirty=false;prepared='';hadPrepared=false;loading=false;loadFailed=false;adultMessage=adultDefault;kidMessage=kidDefault;organizer();
+  await loadSavedWishes();
 }
 function organizer() {
   app.innerHTML=`
@@ -328,8 +356,8 @@ function organizer() {
   <p class="muted">Send each message in your messaging app, then come back and mark it sent. Opening a message or copying a link does not mark it sent.</p>
   <details><summary>Message settings</summary><div id="messages"></div><p class="muted">Use {name}, {link} and {kid}. Keep {link} so people can open their match.</p></details><div id="sendrows"></div></section>
   <section><details id="gifts"><summary><h2>Gift ideas</h2></summary><p>Optional. You can add these now or later.</p>
-  <p class="muted">One idea per line. Saved people load here automatically, without setting up a draw. Names and ideas are public; leave out private information.</p>
-  <p id="loadnote" class="muted"></p><button id="retry" type="button" hidden>Retry loading saved ideas</button><div id="wishboxes"></div>
+  <p class="muted">One idea per line. Saved people load here automatically, without setting up a draw. Names and ideas are public; leave out private information. Renaming a participant keeps their draft ideas under the new name. Published names remain in the file so old recipient links still work.</p>
+  <p id="loadnote" class="muted"></p><button id="retry" type="button" hidden>Retry loading saved ideas</button><div id="freshchoice" hidden><p class="muted">If you are starting from scratch, you can create a new file. Uploading it will replace all existing gift ideas.</p><button id="freshfile" type="button" class="danger">Start a new wish list file</button></div><div id="wishboxes"></div>
   <details><summary>Add someone for gift ideas only</summary><label>Name<input id="giftname" autocomplete="off"></label><button type="button" id="addgift">Add person to gift ideas</button></details>
   <button type="button" id="generate" class="primary">Prepare wish list update</button><p id="wishstatus" role="status" aria-live="polite"></p>
   <div id="wishoutput" hidden><p>1. Download your update.</p><div class="row"><button type="button" id="download">Download wishlists.json</button><button type="button" id="copyjson">Copy update</button></div>
@@ -350,19 +378,29 @@ function organizer() {
     if(giftNames().some(n=>slug(n)===id)){$('wishstatus').textContent='This person already has a gift idea box above.';return;}
     extraNames.push(name); ideasDirty=true; invalidateWishOutput(); $('giftname').value=''; renderWishes();
   };
-  $('retry').onclick=loadSavedWishes;
+  $('retry').onclick=loadSavedWishes; $('freshfile').onclick=startNewWishFile;
   renderSetup(); renderWishes(); updateDrawView(); updateLoadNote();
 }
 function updateLoadNote() {
   if(!$('loadnote'))return;
-  $('loadnote').textContent=loading?'Loading saved ideas…':loadFailed?'Saved ideas could not be loaded. Retry before preparing an update to preserve existing lists.':'';
-  $('retry').hidden=!loadFailed; $('generate').disabled=loading;
+  $('loadnote').textContent=loading?'Loading saved ideas…':loadFailed?'Saved ideas could not be loaded. Preparing an update is blocked until you retry or choose to start a new file.':newWishFile?'New file mode: uploading will replace all published gift ideas.':'';
+  $('retry').hidden=!loadFailed;
+  $('retry').disabled=loading;
+  $('freshchoice').hidden=!loadFailed || loading;
+  $('generate').disabled=loading;
+}
+function startNewWishFile() {
+  if(!confirm('Start a new wish list file? Uploading it will replace all published gift ideas. Existing lists that are not shown here will be removed.'))return;
+  ++loadRequest; loading=false;loadFailed=false;sourceReady=true;newWishFile=true;fetched={};
+  ideasDirty=true;invalidateWishOutput();renderWishes();updateLoadNote();
 }
 async function loadSavedWishes() {
-  const version=routeVersion; loading=true; updateLoadNote();
-  const fresh=await fetchWishes(); if(version!==routeVersion)return;
-  loading=false;loadFailed=fresh===null;
-  if(fresh!==null){fetched=fresh;invalidateWishOutput();renderWishes();}
+  const version=routeVersion, request=++loadRequest;
+  loading=true;sourceReady=false;newWishFile=false;invalidateWishOutput();updateLoadNote();
+  const fresh=await fetchWishes();
+  if(version!==routeVersion || request!==loadRequest)return;
+  loading=false;loadFailed=fresh===null;sourceReady=fresh!==null;
+  if(fresh!==null){fetched=fresh;renderWishes();}
   updateLoadNote();
 }
 async function route() {
