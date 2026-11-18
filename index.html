@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="data:,">
-<meta name="application-version" content="1.1.1">
+<meta name="application-version" content="1.1.2">
 <title>Family Secret Santa</title>
 <style>
 :root{color-scheme:light;--ink:#233e35;--green:#285b48;--paper:#fbf8f1;--line:#dcded4;--red:#963f39}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.5 system-ui,sans-serif}main{max-width:820px;margin:auto;padding:32px 18px 70px}header{padding:12px 0 24px;border-bottom:1px solid var(--line)}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;color:var(--red)}h1{font-family:Georgia,serif;font-weight:normal;font-size:clamp(36px,7vw,54px);line-height:1.12;margin:12px 0}h2{font-size:24px;margin:0 0 10px}h3{font-size:19px;margin:0}p{margin:10px 0}section{margin-top:28px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:14px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.between{justify-content:space-between}.muted,small{color:#58685f;font-size:14px}label{display:block;font-size:14px;font-weight:650;margin:10px 0}input,select,textarea,button{font:inherit}input,select,textarea{display:block;width:100%;padding:12px;border:1px solid #aab8ae;border-radius:8px;color:var(--ink);background:#fff;margin-top:5px}textarea{min-height:100px;resize:vertical}button{min-height:46px;padding:10px 17px;border:1px solid var(--green);border-radius:8px;color:var(--green);background:white;cursor:pointer;font-weight:650}button.primary{background:var(--green);color:#fff}button.danger{color:var(--red);border-color:#d1a9a5}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #ba8c3e;outline-offset:3px}.member{border-top:1px solid var(--line);padding:12px 0;display:grid;grid-template-columns:2fr 1fr;gap:0 12px}.member .contact{grid-column:1/-1}.member button{justify-self:start}#error{color:var(--red);font-weight:650}#status{min-height:24px}.reveal{max-width:570px;margin:9vh auto;text-align:center;padding:35px 24px}.reveal h1{font-size:46px;overflow-wrap:anywhere}.reveal ul{text-align:left;padding-left:24px}.reveal li{padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.sent{color:var(--green);font-weight:700}#json{font:13px/1.5 ui-monospace,monospace;min-height:180px}[hidden]{display:none!important}@media(min-width:640px){.member{grid-template-columns:2fr 1fr 2fr auto;align-items:end}.member .contact{grid-column:auto}.member button{margin-bottom:10px}}
@@ -101,6 +101,15 @@ function deliveryTarget(person, allPeople) {
   const adults = allPeople.filter(p => p.householdId === person.householdId && p.type === 'Adult');
   return adults.find(p => String(p.id) === String(person.parent)) || (adults.length === 1 ? adults[0] : null);
 }
+function sameWishlists(actual, expected) {
+  const keys=Object.keys(expected);
+  return Object.keys(actual).length===keys.length && keys.every(id=>
+    Object.hasOwn(actual,id) && actual[id].name===expected[id].name &&
+    JSON.stringify(actual[id].ideas)===JSON.stringify(expected[id].ideas));
+}
+function messageTemplateError(template) {
+  return template.includes('{link}') ? '' : 'Add {link} so the message includes the private reveal link.';
+}
 function deliveryUrl(contact, message) {
   return contactKind(contact) === 'sms'
     ? 'sms:' + contact.replace(/[^+\d]/g,'') + '?&body=' + encodeURIComponent(message)
@@ -109,7 +118,7 @@ function deliveryUrl(contact, message) {
 </script>
 <script>
 'use strict';
-const VERSION = '1.1.1';
+const VERSION = '1.1.2';
 const app = document.getElementById('app');
 const adultDefault = 'Hi {name}, here is your private Secret Santa link: {link}  Please keep it to yourself!';
 const kidDefault = "Hi {name}, this link is for {kid}'s Secret Santa: {link}  Please keep it a surprise!";
@@ -117,7 +126,7 @@ let households = [], matches = null, drawCode = '', counter = 0, routeVersion = 
 let sent = new Set(), opened = new Set(), fetched = {}, wishes = Object.create(null), extraNames = [];
 let loadFailed = false, loading = false, ideasDirty = false, prepared = '', hadPrepared = false;
 // An export needs either a successfully loaded file or an explicit fresh-file choice.
-let sourceReady = false, newWishFile = false, loadRequest = 0;
+let sourceReady = false, newWishFile = false, loadRequest = 0, publicationRequest = 0;
 let adultMessage = adultDefault, kidMessage = kidDefault;
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => {
@@ -221,6 +230,8 @@ function giftNames() {
   return [...names.values()];
 }
 function invalidateWishOutput() {
+  ++publicationRequest;
+  if($('checkpublished'))$('checkpublished').disabled=false;
   prepared='';
   if ($('wishoutput')) $('wishoutput').hidden=true;
   if ($('json')) $('json').value='';
@@ -269,6 +280,30 @@ function markUploaded() {
   newWishFile=false;
   $('wishstatus').textContent='Marked as uploaded. Reopen a recipient link after deployment to check the ideas.';
 }
+async function checkPublishedIdeas() {
+  if(!prepared)return;
+  const snapshot=prepared, version=routeVersion, request=++publicationRequest;
+  $('checkpublished').disabled=true;
+  $('wishstatus').textContent='Checking the published wish list file…';
+  const fresh=await fetchWishes();
+  if(version!==routeVersion || request!==publicationRequest || prepared!==snapshot)return;
+  $('checkpublished').disabled=false;
+  if(fresh===null){
+    $('wishstatus').textContent='Could not check the published file. Your edits are still here. Try again when the site is available.';return;
+  }
+  if(!sameWishlists(fresh,JSON.parse(snapshot).people)){
+    $('wishstatus').textContent='The published file does not match this update yet. Check that you uploaded the latest file and wait for GitHub deployment, then try again.';return;
+  }
+  markUploaded();
+  $('wishstatus').textContent='Verified: the published gift ideas match this update. Your ideas are saved.';
+}
+function updateMessageWarnings() {
+  const errors=[];
+  if(messageTemplateError(adultMessage))errors.push('Adult message: '+messageTemplateError(adultMessage));
+  if(messageTemplateError(kidMessage))errors.push('Kid message: '+messageTemplateError(kidMessage));
+  if($('messagewarning'))$('messagewarning').textContent=errors.join(' ');
+  if(matches)renderDelivery();
+}
 function needsWarning() {return ideasDirty || Boolean(matches && sent.size<people().length);}
 function validate() {
   if (households.some(h=>!h.name.trim()||!h.members.length)) return 'Give each household a name and at least one person.';
@@ -300,8 +335,10 @@ function linkFor(p) {
   return location.origin+location.pathname+'#/r/'+encode({g:p.name,r:match.receiver,rid:slug(match.receiver),k:p.type==='Kid'?p.name:'',d:drawCode});
 }
 function openMessage(p,target) {
+  const template=p.type==='Kid'?kidMessage:adultMessage;
+  if(messageTemplateError(template)){updateMessageWarnings();note('Open Message settings and add {link} before sending.');return;}
   const link=linkFor(p);
-  const message=(p.type==='Kid'?kidMessage:adultMessage).replace(/\{(name|link|kid)\}/g,(_,key)=>({name:target.name,link,kid:p.type==='Kid'?p.name:''})[key]);
+  const message=template.replace(/\{(name|link|kid)\}/g,(_,key)=>({name:target.name,link,kid:p.type==='Kid'?p.name:''})[key]);
   opened.add(p.id); renderDelivery(); location.href=deliveryUrl(target.contact,message);
 }
 function renderDelivery() {
@@ -322,11 +359,16 @@ function renderDelivery() {
       card.append(el('p',target?`Send ${p.name}'s link to ${target.name}.`:adults.length?'Choose an adult in this household, or copy the link.':'No adult in this household. Copy the link to share it.','muted'));
     }
     const actions=el('div',undefined,'row'), kind=target?contactKind(target.contact):'';
-    if(kind) actions.append(button(kind==='sms'?'Send text':'Send email',()=>openMessage(p,target),'primary'));
+    const templateError=messageTemplateError(p.type==='Kid'?kidMessage:adultMessage);
+    if(kind){
+      const send=button(kind==='sms'?'Send text':'Send email',()=>openMessage(p,target),'primary');
+      send.disabled=Boolean(templateError);actions.append(send);
+    }
     actions.append(button('Copy link',()=>copy(linkFor(p))));
     actions.append(button(sent.has(p.id)?'Undo sent':'Mark sent',()=>{
       sent.has(p.id)?sent.delete(p.id):sent.add(p.id);renderDelivery();
     })); card.append(actions);
+    if(templateError)card.append(el('p','Open Message settings and add {link} to the '+(p.type==='Kid'?'kid':'adult')+' message. Copy link still works.','error'));
     if(!kind) card.append(el('p',target?'Add a phone or email below, or use Copy link.':'Copy link works without a contact.','muted'));
     if(target) {
       const details=el('details',undefined,'contact-edit');details.append(el('summary','Contact for '+target.name));
@@ -354,7 +396,7 @@ function organizer() {
   <section id="drawsection"><h2>2. Draw names</h2><p class="muted">Matches stay hidden here, so you can join in too.</p><p id="error" role="alert"></p><button type="button" id="draw" class="primary">Draw names</button></section>
   <section id="delivery" hidden><h2>3. Send the surprises</h2><p id="progress" role="status"></p>
   <p class="muted">Send each message in your messaging app, then come back and mark it sent. Opening a message or copying a link does not mark it sent.</p>
-  <details><summary>Message settings</summary><div id="messages"></div><p class="muted">Use {name}, {link} and {kid}. Keep {link} so people can open their match.</p></details><div id="sendrows"></div></section>
+  <details><summary>Message settings</summary><div id="messages"></div><p id="messagewarning" class="error" role="alert"></p><p class="muted">Use {name}, {link} and {kid}. Keep {link} so people can open their match.</p></details><div id="sendrows"></div></section>
   <section><details id="gifts"><summary><h2>Gift ideas</h2></summary><p>Optional. You can add these now or later.</p>
   <p class="muted">One idea per line. Saved people load here automatically, without setting up a draw. Names and ideas are public; leave out private information. Renaming a participant keeps their draft ideas under the new name. Published names remain in the file so old recipient links still work.</p>
   <p id="loadnote" class="muted"></p><button id="retry" type="button" hidden>Retry loading saved ideas</button><div id="freshchoice" hidden><p class="muted">If you are starting from scratch, you can create a new file. Uploading it will replace all existing gift ideas.</p><button id="freshfile" type="button" class="danger">Start a new wish list file</button></div><div id="wishboxes"></div>
@@ -364,13 +406,13 @@ function organizer() {
   <details><summary>View file contents</summary><label>Generated wishlists.json<textarea id="json" readonly></textarea></label></details>
   <p>2. In your GitHub repository, choose Add file, then Upload files. Upload this wishlists.json and commit the change.</p>
   <p class="muted">Downloading or copying does not publish your ideas. Changes go live after GitHub finishes deployment.</p>
-  <p>3. After uploading, mark this update done.</p><button type="button" id="uploaded">I've uploaded this update</button></div></details></section>
+  <p>3. After GitHub finishes deployment, check that your ideas are published.</p><button type="button" id="checkpublished">Check published ideas</button></div></details></section>
   <details class="settings"><summary>Start over or re-draw</summary><p class="muted">Re-draw keeps this group and makes new matches. Clear everything removes this tab's setup and unpublished edits. Old links will still work.</p>
   <div class="row"><button type="button" id="redraw" class="danger" hidden>Re-draw names</button><button type="button" id="clear" class="danger">Clear everything</button></div></details>
   <p id="status" role="status" aria-live="polite"></p><p class="version">Family Secret Santa v${VERSION}</p>`;
   $('addhouse').onclick=addHouse; $('draw').onclick=draw; $('redraw').onclick=draw; $('clear').onclick=clearAll;
-  $('messages').append(field('Adult message',adultMessage,v=>adultMessage=v,'textarea'),field('Kid message',kidMessage,v=>kidMessage=v,'textarea'));
-  $('generate').onclick=generateWishlists; $('download').onclick=downloadWishes; $('uploaded').onclick=markUploaded;
+  $('messages').append(field('Adult message',adultMessage,v=>{adultMessage=v;updateMessageWarnings();},'textarea'),field('Kid message',kidMessage,v=>{kidMessage=v;updateMessageWarnings();},'textarea'));
+  $('generate').onclick=generateWishlists; $('download').onclick=downloadWishes; $('checkpublished').onclick=checkPublishedIdeas;
   $('copyjson').onclick=()=>{if(prepared)copy(prepared,'wishstatus');};
   $('addgift').onclick=()=>{
     const name=$('giftname').value.trim(), id=slug(name);
@@ -379,7 +421,7 @@ function organizer() {
     extraNames.push(name); ideasDirty=true; invalidateWishOutput(); $('giftname').value=''; renderWishes();
   };
   $('retry').onclick=loadSavedWishes; $('freshfile').onclick=startNewWishFile;
-  renderSetup(); renderWishes(); updateDrawView(); updateLoadNote();
+  renderSetup(); renderWishes(); updateDrawView(); updateLoadNote(); updateMessageWarnings();
 }
 function updateLoadNote() {
   if(!$('loadnote'))return;

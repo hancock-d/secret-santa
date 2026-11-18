@@ -18,7 +18,7 @@ test('all small household distributions agree with feasibility rule',()=>{for(le
 
 // Run the actual wish list click handler with a minimal document surface.
 function wishEditor(setup) {
-  const nodes=Object.fromEntries(['app','wishoutput','json','wishstatus','loadnote','retry','freshchoice','generate'].map(id=>[id,{hidden:true,value:'',textContent:''}]));
+  const nodes=Object.fromEntries(['app','wishoutput','json','wishstatus','loadnote','retry','freshchoice','generate','checkpublished','messagewarning','status'].map(id=>[id,{hidden:true,value:'',textContent:''}]));
   const context=vm.createContext({document:{getElementById:id=>nodes[id]},window:{addEventListener(){}},confirm:()=>true});
   const scripts=[...html.matchAll(/<script(?: [^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
   vm.runInContext(scripts[0],context);
@@ -49,7 +49,7 @@ test('empty wish list setup explains what to do',()=>{
   assert.equal(nodes.wishoutput.hidden,true);
 });
 
-const logic=vm.runInNewContext(source+';({buildWishlists,contactKind,deliveryTarget,deliveryUrl})');
+const logic=vm.runInNewContext(source+';({buildWishlists,contactKind,deliveryTarget,deliveryUrl,sameWishlists,messageTemplateError})');
 test('partial updates retain other published lists and omit contacts',()=>{
   const saved={alex:{name:'Alex',ideas:['Old'],contact:'secret'},blair:{name:'Blair',ideas:['Keep this']}};
   const result=logic.buildWishlists([{name:'Alex',ideas:'New'}],saved);
@@ -172,4 +172,63 @@ test('release version is consistent across app metadata, footer, README and chan
   assert.ok(html.includes(`name="application-version" content="${version}"`));
   assert.ok(readFileSync(new URL('../README.md',import.meta.url),'utf8').startsWith(`# Family Secret Santa v${version}\n`));
   assert.ok(readFileSync(new URL('../CHANGELOG.md',import.meta.url),'utf8').includes(`## ${version} (`));
+});
+
+test('publication comparison ignores object ordering but detects missing or changed ideas',()=>{
+  const expected={alex:{name:'Alex',ideas:['Books']},blair:{name:'Blair',ideas:[]}};
+  assert.equal(logic.sameWishlists({blair:expected.blair,alex:expected.alex},expected),true);
+  assert.equal(logic.sameWishlists({alex:expected.alex},expected),false);
+  assert.equal(logic.sameWishlists({...expected,alex:{name:'Alex',ideas:['Coffee']}},expected),false);
+});
+test('matching published ideas clear the unpublished-edit warning',async()=>{
+  const {context,nodes}=wishEditor(`extraNames=['Alex'];editIdeas('Alex','Books');fetchWishes=async()=>({alex:{name:'Alex',ideas:['Books']}});`);
+  await vm.runInContext('checkPublishedIdeas()',context);
+  assert.match(nodes.wishstatus.textContent,/Verified/);
+  assert.equal(vm.runInContext('ideasDirty',context),false);
+  assert.equal(nodes.checkpublished.disabled,false);
+});
+test('mismatch or failed check keeps drafts and warning',async()=>{
+  const {context,nodes}=wishEditor(`extraNames=['Alex'];editIdeas('Alex','Books');fetchWishes=async()=>({alex:{name:'Alex',ideas:['Old']}});`);
+  await vm.runInContext('checkPublishedIdeas()',context);
+  assert.match(nodes.wishstatus.textContent,/does not match/);
+  assert.equal(vm.runInContext('ideasDirty',context),true);
+  assert.equal(vm.runInContext(`wishText('Alex')`,context),'Books');
+  vm.runInContext('fetchWishes=async()=>null;',context);
+  await vm.runInContext('checkPublishedIdeas()',context);
+  assert.match(nodes.wishstatus.textContent,/Could not check/);
+  assert.equal(vm.runInContext('ideasDirty',context),true);
+});
+test('editing during a publication check cannot mark newer ideas saved',async()=>{
+  const {context,nodes}=wishEditor(`extraNames=['Alex'];editIdeas('Alex','Books');fetchWishes=()=>new Promise(resolve=>globalThis.finishCheck=resolve);`);
+  const checking=vm.runInContext('checkPublishedIdeas()',context);
+  vm.runInContext(`editIdeas('Alex','Coffee');generateWishlists();finishCheck({alex:{name:'Alex',ideas:['Books']}});`,context);
+  await checking;
+  assert.equal(vm.runInContext('ideasDirty',context),true);
+  assert.equal(vm.runInContext(`wishText('Alex')`,context),'Coffee');
+  assert.doesNotMatch(nodes.wishstatus.textContent,/Verified/);
+});
+test('regenerating the same update cancels an earlier publication check',async()=>{
+  const {context,nodes}=wishEditor(`extraNames=['Alex'];editIdeas('Alex','Books');fetchWishes=()=>new Promise(resolve=>globalThis.finishCheck=resolve);`);
+  const checking=vm.runInContext('checkPublishedIdeas()',context);
+  vm.runInContext(`generateWishlists();finishCheck({alex:{name:'Alex',ideas:['Books']}});`,context);
+  await checking;
+  assert.equal(vm.runInContext('ideasDirty',context),true);
+  assert.doesNotMatch(nodes.wishstatus.textContent,/Verified/);
+});
+test('missing link blocks opening a message and leaves it unsent',()=>{
+  const {context,nodes}=wishEditor(`households=[{id:1,name:'A',members:[{id:2,name:'Alex',type:'Adult',contact:'alex@example.com'}]}];adultMessage='Hi {name}!';location={href:'unchanged'};`);
+  vm.runInContext('openMessage(people()[0],people()[0]);',context);
+  assert.equal(vm.runInContext('location.href',context),'unchanged');
+  assert.equal(vm.runInContext('opened.size+sent.size',context),0);
+  assert.match(nodes.messagewarning.textContent,/Adult message/);
+  assert.match(nodes.status.textContent,/add \{link\}/);
+});
+test('template warnings are independent and clear when fixed',()=>{
+  const {context,nodes}=wishEditor(`kidMessage='Hello';updateMessageWarnings();`);
+  assert.match(nodes.messagewarning.textContent,/Kid message/);
+  assert.doesNotMatch(nodes.messagewarning.textContent,/Adult message/);
+  vm.runInContext(`kidMessage='For {kid}: {link}';updateMessageWarnings();`,context);
+  assert.equal(nodes.messagewarning.textContent,'');
+  assert.ok(logic.messageTemplateError(''));
+  assert.equal(logic.messageTemplateError('{link}'),'');
 });

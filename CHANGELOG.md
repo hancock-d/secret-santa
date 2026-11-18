@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.2 (2026-11-18)
+
+- Add Check published ideas to verify the served file matches the prepared update.
+- Keep drafts and the exit warning when publication fails or still shows older ideas.
+- Ignore publication-check responses after edits, reloads or regenerated updates.
+- Warn about message templates missing {link} and block their send action; keep Copy link available.
+- Remove generated release folders and use one current set of project files for GitHub uploads.
+
+Validation: 33 dependency-free Node tests passed. Checks used local files and mocked
+network responses only, with no browser, screen or audio access. Live publication
+and real-device messaging remain unverified.
+
 ## 1.1.1 (2026-11-18)
 
 - Reload published ideas after clearing setup and block exports until the load completes.
