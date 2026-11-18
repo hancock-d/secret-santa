@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0 (2026-11-18)
+
+- Replace the disabled kid contact field with an adult selector during setup.
+- Allow kid links to use an adult from any household, independent of draw rules.
+- Show adult names and households; refresh choices when adults are added, edited or removed.
+- Add Everyone together as an alternative to separate adult and kid pools.
+- Add an independent setting to allow same-household matches; self draws are always forbidden.
+- Keep existing rules as defaults and show the active rules on the delivery screen.
+- Clarify that adding a wish list alone does not enter someone into the draw.
+
+Validation: 40 Node tests cover all draw configurations, random seeds and backtracking,
+contacts across households, setup controls and the one-kid/two-adult example. No browser,
+screen or audio access was used. Real-device delivery and live deployment remain unverified.
+
 ## 1.1.2 (2026-11-18)
 
 - Add Check published ideas to verify the served file matches the prepared update.

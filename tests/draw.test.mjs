@@ -73,15 +73,16 @@ test('changing ideas invalidates prepared data and keeps exit warning until ackn
 test('saved name collisions cannot overwrite another person',()=>{
   assert.match(logic.buildWishlists([{name:'Anne Marie',ideas:'New'}],{'anne-marie':{name:'Anne-Marie',ideas:['Keep']}}).error,/conflicts/);
 });
-test('kid delivery chooses only an adult in the same household',()=>{
-  const kid={id:1,type:'Kid',householdId:1,parent:''};
-  const adult={id:2,type:'Adult',householdId:1,contact:'a@example.com'};
-  const other={id:3,type:'Adult',householdId:2};
-  assert.equal(logic.deliveryTarget(kid,[kid,adult,other]),adult);
-  const second={id:4,type:'Adult',householdId:1};
-  assert.equal(logic.deliveryTarget(kid,[kid,adult,second]),null);
-  assert.equal(logic.deliveryTarget({...kid,parent:'4'},[kid,adult,second]),second);
-  assert.equal(logic.deliveryTarget({...kid,parent:'3'},[kid,other]),null);
+test('kid delivery accepts an adult from any household and rejects stale choices',()=>{
+  const kid={id:1,name:'Jamie',type:'Kid',householdId:1,parent:''};
+  const adult={id:2,name:'Alex',type:'Adult',householdId:2,contact:'a@example.com'};
+  const other={id:3,name:'Blair',type:'Adult',householdId:3};
+  assert.equal(logic.deliveryTarget(kid,[kid,adult]),adult);
+  assert.equal(logic.deliveryTarget(kid,[kid,adult,other]),null);
+  assert.equal(logic.deliveryTarget({...kid,parent:'3'},[kid,adult,other]),other);
+  assert.equal(logic.deliveryTarget({...kid,parent:'2'},[kid,other]),null);
+  assert.equal(logic.deliveryTarget({...kid,parent:'1'},[kid,adult]),null);
+  assert.equal(logic.deliveryTarget(kid,[kid,{...adult,name:''}]),null);
 });
 test('delivery URL formats and contact detection',()=>{
   assert.equal(logic.contactKind('555 123 4567'),'sms');
@@ -231,4 +232,80 @@ test('template warnings are independent and clear when fixed',()=>{
   assert.equal(nodes.messagewarning.textContent,'');
   assert.ok(logic.messageTemplateError(''));
   assert.equal(logic.messageTemplateError('{link}'),'');
+});
+
+function checkFlexible(people,result,options) {
+  assert.equal(result.error,undefined);
+  assert.equal(result.assignments.length,people.length);
+  assert.equal(new Set(result.assignments.map(a=>a.giver)).size,people.length);
+  assert.equal(new Set(result.assignments.map(a=>a.receiver)).size,people.length);
+  for(const a of result.assignments){
+    const g=people.find(p=>p.name===a.giver),r=people.find(p=>p.name===a.receiver);
+    assert.ok(g&&r);assert.notEqual(g.name,r.name);
+    if(!options.mixed)assert.equal(g.type,r.type);
+    if(!options.allowHousehold)assert.notEqual(g.household,r.household);
+  }
+}
+test('one kid and two adults work in a giant pool with same-household matches enabled',()=>{
+  const ps=[{name:'Jamie',type:'Kid',household:'Kids'},{name:'Alex',type:'Adult',household:'Adults'},{name:'Blair',type:'Adult',household:'Adults'}];
+  assert.ok(drawPeople(ps).error);
+  assert.match(drawPeople(ps,seeded(1),200,{mixed:true}).error,/more than half/);
+  for(let seed=0;seed<1000;seed++)checkFlexible(ps,drawPeople(ps,seeded(seed),200,{mixed:true,allowHousehold:true}),{mixed:true,allowHousehold:true});
+});
+test('all draw configurations preserve their rules across seeds and backtracking',()=>{
+  const ps=[...group([2,2,1]),...group([1,1,1],'Kid')];
+  const initial=JSON.stringify(ps);
+  for(const mixed of [false,true])for(const allowHousehold of [false,true])for(const retries of [0,200])for(let seed=0;seed<100;seed++){
+    const options={mixed,allowHousehold};
+    checkFlexible(ps,drawPeople(ps,seeded(seed),retries,options),options);
+  }
+  assert.equal(JSON.stringify(ps),initial);
+});
+test('a single household is valid only when household matching is enabled',()=>{
+  const ps=[...group([2]),...group([2],'Kid')];
+  assert.ok(drawPeople(ps).error);
+  checkFlexible(ps,drawPeople(ps,seeded(5),0,{allowHousehold:true}),{allowHousehold:true});
+  checkFlexible(ps,drawPeople(ps,seeded(5),0,{mixed:true,allowHousehold:true}),{mixed:true,allowHousehold:true});
+});
+test('mixed single-person pool still fails clearly',()=>{
+  assert.match(drawPeople(group([1]),seeded(1),0,{mixed:true,allowHousehold:true}).error,/Everyone.*only one/);
+});
+// Minimal element surface to exercise setup controls without opening a browser.
+class ControlNode {
+  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.classList={add(){}};}
+  append(...children){this.children.push(...children);}
+  replaceChildren(...children){this.children=children;}
+  setAttribute(name,value){this[name]=value;}
+}
+test('kid setup selector lists and selects contacts across households before drawing',()=>{
+  const {context}=wishEditor(`households=[{id:1,name:'Kids',members:[{id:1,name:'Jamie',type:'Kid',parent:''}]},{id:2,name:'Adults',members:[{id:2,name:'Alex',type:'Adult',contact:'alex@example.com'},{id:3,name:'Blair',type:'Adult',contact:'5551234567'}]}];`);
+  context.makeNode=tag=>new ControlNode(tag);
+  const control=vm.runInContext(`document.createElement=makeNode;kidContactControl(people()[0]);`,context);
+  const select=control.children[0].children[0];
+  assert.deepEqual(select.children.map(o=>o.textContent),['Choose an adult','Alex (Adults)','Blair (Adults)']);
+  select.value='3';select.onchange();
+  assert.equal(vm.runInContext('originalPerson(1).parent',context),'3');
+  assert.equal(vm.runInContext('deliveryTarget(people()[0],people()).contact',context),'5551234567');
+  assert.equal(vm.runInContext('matches',context),null);
+});
+test('setup draw controls configure the actual draw options',()=>{
+  const {context,nodes}=wishEditor('');
+  nodes.drawsettings=new ControlNode('div');
+  context.makeNode=tag=>new ControlNode(tag);
+  vm.runInContext(`document.createElement=makeNode;document.createTextNode=text=>text;renderDrawSettings();`,context);
+  const [poolLabel,householdLabel]=nodes.drawsettings.children;
+  const pool=poolLabel.children[0],checkbox=householdLabel.children[0];
+  assert.equal(pool.value,'separate');assert.equal(checkbox.checked,false);
+  pool.value='mixed';pool.onchange();checkbox.checked=true;checkbox.onchange();
+  assert.equal(vm.runInContext('drawOptions.mixed && drawOptions.allowHousehold',context),true);
+  assert.match(vm.runInContext('drawRuleSummary()',context),/Everyone.*allowed.*Nobody draws themselves/);
+});
+test('organizer draw uses mixed settings and keeps kid reveal identity',()=>{
+  const {context,nodes}=wishEditor(`households=[{id:1,name:'Kids',members:[{id:1,name:'Jamie',type:'Kid',parent:'2'}]},{id:2,name:'Adults',members:[{id:2,name:'Alex',type:'Adult'},{id:3,name:'Blair',type:'Adult'}]}];drawOptions={mixed:true,allowHousehold:true};updateDrawView=()=>{};`);
+  context.crypto={getRandomValues:a=>a.fill(0)};
+  context.TextEncoder=TextEncoder;context.TextDecoder=TextDecoder;context.btoa=btoa;context.atob=atob;
+  vm.runInContext(`location={origin:'https://example.com',pathname:'/santa/'};draw();`,context);
+  assert.equal(vm.runInContext('matches.length',context),3);
+  const data=JSON.parse(vm.runInContext(`JSON.stringify(decode(linkFor(people()[0]).split('#/r/')[1]))`,context));
+  assert.equal(data.g,'Jamie');assert.equal(data.k,'Jamie');assert.ok(['Alex','Blair'].includes(data.r));
 });

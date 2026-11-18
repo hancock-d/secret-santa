@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="data:,">
-<meta name="application-version" content="1.1.2">
+<meta name="application-version" content="1.2.0">
 <title>Family Secret Santa</title>
 <style>
 :root{color-scheme:light;--ink:#233e35;--green:#285b48;--paper:#fbf8f1;--line:#dcded4;--red:#963f39}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.5 system-ui,sans-serif}main{max-width:820px;margin:auto;padding:32px 18px 70px}header{padding:12px 0 24px;border-bottom:1px solid var(--line)}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;color:var(--red)}h1{font-family:Georgia,serif;font-weight:normal;font-size:clamp(36px,7vw,54px);line-height:1.12;margin:12px 0}h2{font-size:24px;margin:0 0 10px}h3{font-size:19px;margin:0}p{margin:10px 0}section{margin-top:28px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:14px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.between{justify-content:space-between}.muted,small{color:#58685f;font-size:14px}label{display:block;font-size:14px;font-weight:650;margin:10px 0}input,select,textarea,button{font:inherit}input,select,textarea{display:block;width:100%;padding:12px;border:1px solid #aab8ae;border-radius:8px;color:var(--ink);background:#fff;margin-top:5px}textarea{min-height:100px;resize:vertical}button{min-height:46px;padding:10px 17px;border:1px solid var(--green);border-radius:8px;color:var(--green);background:white;cursor:pointer;font-weight:650}button.primary{background:var(--green);color:#fff}button.danger{color:var(--red);border-color:#d1a9a5}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #ba8c3e;outline-offset:3px}.member{border-top:1px solid var(--line);padding:12px 0;display:grid;grid-template-columns:2fr 1fr;gap:0 12px}.member .contact{grid-column:1/-1}.member button{justify-self:start}#error{color:var(--red);font-weight:650}#status{min-height:24px}.reveal{max-width:570px;margin:9vh auto;text-align:center;padding:35px 24px}.reveal h1{font-size:46px;overflow-wrap:anywhere}.reveal ul{text-align:left;padding-left:24px}.reveal li{padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.sent{color:var(--green);font-weight:700}#json{font:13px/1.5 ui-monospace,monospace;min-height:180px}[hidden]{display:none!important}@media(min-width:640px){.member{grid-template-columns:2fr 1fr 2fr auto;align-items:end}.member .contact{grid-column:auto}.member button{margin-bottom:10px}}
@@ -16,7 +16,7 @@
 <body><main id="app"></main>
 <script id="draw-logic">
 // Pure draw function. Inject a seeded random function in tests.
-function drawPeople(people, random = Math.random, retries = 200) {
+function drawPeople(people, random = Math.random, retries = 200, options = {}) {
   const fail = error => ({error});
   if (!Array.isArray(people) || !people.length) return fail('Add people before drawing.');
   const names = new Set();
@@ -32,20 +32,21 @@ function drawPeople(people, random = Math.random, retries = 200) {
     for (let i=a.length-1;i>0;i--) { const j=Math.floor(random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
     return a;
   };
-  for (const type of ['Adult','Kid']) {
-    const pool = people.filter(p=>p.type===type);
+  const allowed=(giver,receiver)=>giver.name!==receiver.name && (options.allowHousehold===true || giver.household!==receiver.household);
+  for (const type of options.mixed===true ? ['Everyone'] : ['Adult','Kid']) {
+    const pool = type==='Everyone' ? people : people.filter(p=>p.type===type);
     if (!pool.length) continue;
-    if (pool.length<2) return fail(type+' pool has only one person. Add someone from another household, or remove this pool.');
+    if (pool.length<2) return fail(type+' pool has only one person. Add another person to this pool or choose Everyone together.');
     const counts = new Map();
     pool.forEach(p=>counts.set(p.household,(counts.get(p.household)||0)+1));
-    for (const [household,count] of counts) if (count>pool.length/2) return fail(type+' pool cannot be drawn: '+household+' has '+count+' of '+pool.length+' people, more than half. Add people from other households.');
+    for (const [household,count] of counts) if (options.allowHousehold!==true && count>pool.length/2) return fail(type+' pool cannot be drawn: '+household+' has '+count+' of '+pool.length+' people, more than half. Add people from other households or allow matches within a household.');
     let recipients;
     for (let n=0;n<retries;n++) {
       const candidate=shuffle(pool);
-      if (candidate.every((p,i)=>p.household!==pool[i].household)) { recipients=candidate; break; }
+      if (candidate.every((p,i)=>allowed(pool[i],p))) { recipients=candidate; break; }
     }
     if (!recipients) {
-      const candidates=pool.map(p=>shuffle(pool.map((_,i)=>i).filter(i=>pool[i].household!==p.household)));
+      const candidates=pool.map(p=>shuffle(pool.map((_,i)=>i).filter(i=>allowed(p,pool[i]))));
       const used=new Set(), chosen=Array(pool.length);
       function search(depth) {
         if (depth===pool.length) return true;
@@ -98,8 +99,9 @@ function contactKind(contact) {
 }
 function deliveryTarget(person, allPeople) {
   if (person.type !== 'Kid') return person;
-  const adults = allPeople.filter(p => p.householdId === person.householdId && p.type === 'Adult');
-  return adults.find(p => String(p.id) === String(person.parent)) || (adults.length === 1 ? adults[0] : null);
+  const adults = allPeople.filter(p => p.type === 'Adult' && p.name.trim());
+  if(person.parent)return adults.find(p => String(p.id) === String(person.parent)) || null;
+  return adults.length === 1 ? adults[0] : null;
 }
 function sameWishlists(actual, expected) {
   const keys=Object.keys(expected);
@@ -118,7 +120,7 @@ function deliveryUrl(contact, message) {
 </script>
 <script>
 'use strict';
-const VERSION = '1.1.2';
+const VERSION = '1.2.0';
 const app = document.getElementById('app');
 const adultDefault = 'Hi {name}, here is your private Secret Santa link: {link}  Please keep it to yourself!';
 const kidDefault = "Hi {name}, this link is for {kid}'s Secret Santa: {link}  Please keep it a surprise!";
@@ -127,6 +129,7 @@ let sent = new Set(), opened = new Set(), fetched = {}, wishes = Object.create(n
 let loadFailed = false, loading = false, ideasDirty = false, prepared = '', hadPrepared = false;
 // An export needs either a successfully loaded file or an explicit fresh-file choice.
 let sourceReady = false, newWishFile = false, loadRequest = 0, publicationRequest = 0;
+let drawOptions={mixed:false,allowHousehold:false};
 let adultMessage = adultDefault, kidMessage = kidDefault;
 const $ = id => document.getElementById(id);
 const el = (tag, text, className) => {
@@ -199,23 +202,60 @@ function editIdeas(name, value) {
 }
 function newMember() {return {id:++counter,name:'',type:'Adult',contact:'',parent:''};}
 function addHouse() {households.push({id:++counter,name:'',members:[newMember()]}); renderSetup();}
+function drawRuleSummary() {
+  return (drawOptions.mixed?'Everyone draws together.':'Adults draw adults. Kids draw kids.')+' '+
+    (drawOptions.allowHousehold?'Same-household matches are allowed.':'Same-household matches are excluded.')+' Nobody draws themselves.';
+}
+function renderDrawSettings() {
+  const box=$('drawsettings');box.replaceChildren();
+  const summary=el('p',drawRuleSummary(),'muted');
+  box.append(selectField('Draw pools',[['separate','Adults and kids separately'],['mixed','Everyone together']],drawOptions.mixed?'mixed':'separate',value=>{
+    drawOptions.mixed=value==='mixed';summary.textContent=drawRuleSummary();
+  }));
+  const label=el('label'), checkbox=el('input');checkbox.type='checkbox';checkbox.checked=drawOptions.allowHousehold;
+  checkbox.onchange=()=>{drawOptions.allowHousehold=checkbox.checked;summary.textContent=drawRuleSummary();};
+  label.append(checkbox,document.createTextNode('Allow matches within the same household'));
+  box.append(label,summary);
+}
+function kidContactControl(person,delivery=false) {
+  const box=el('div'), all=people(), adults=all.filter(p=>p.type==='Adult'&&p.name);
+  box.dataset.kidId=String(person.id);
+  const target=deliveryTarget(person,all);
+  const options=[['','Choose an adult'],...adults.map(a=>[String(a.id),a.name+' ('+(a.household||'household not named yet')+')'])];
+  box.append(selectField('Send '+(person.name||'this kid')+"'s link to",options,target?String(target.id):'',value=>{
+    originalPerson(person.id).parent=value;
+    if(delivery)renderDelivery();
+    refreshKidContacts();
+  }));
+  const hint=!adults.length?'Add an adult to any household first. You can also copy the link after drawing.':
+    !target?'Choose an adult from any household. This does not change who the kid can draw.':
+    contactKind(target.contact)?'Uses '+target.name+"'s contact. This does not change the draw rules.":'Add a phone or email to '+target.name+"'s adult row, or copy the link after drawing.";
+  box.append(el('p',hint,'muted'));
+  return box;
+}
+function refreshKidContacts() {
+  const setup=$('households');if(!setup)return;
+  for(const box of setup.querySelectorAll('[data-kid-id]')) {
+    const person=originalPerson(Number(box.dataset.kidId));
+    if(person){const updated=kidContactControl(person);updated.classList.add('contact');box.replaceWith(updated);}
+  }
+}
 function renderSetup() {
   const box = $('households'); box.replaceChildren();
   for (const h of households) {
     const card = el('div',undefined,'card');
-    card.append(field('Household name',h.name,v => h.name=v),button('Remove household',() => {
+    card.append(field('Household name',h.name,v => {h.name=v;refreshKidContacts();}),button('Remove household',() => {
       households=households.filter(x=>x!==h); invalidateWishOutput(); renderSetup(); renderWishes();
     },'danger'));
     for (const p of h.members) {
       const row = el('div',undefined,'member');
       const nameField=field('Name',p.name,()=>{});
-      nameField.querySelector('input').onchange=event=>{renamePerson(p,event.target.value);renderWishes();};
+      nameField.querySelector('input').onchange=event=>{renamePerson(p,event.target.value);renderWishes();refreshKidContacts();};
       row.append(nameField,
         selectField('Type',[['Adult','Adult'],['Kid','Kid']],p.type,v=>{p.type=v;renderSetup();}),
-        field(p.type==='Kid'?'Contact comes from an adult':'Phone or email (optional)',p.contact,v=>p.contact=v),
+        p.type==='Kid' ? kidContactControl(p) : field('Phone or email (optional)',p.contact,v=>{p.contact=v;refreshKidContacts();}),
         button('Remove',()=>{h.members=h.members.filter(x=>x!==p);invalidateWishOutput();renderSetup();renderWishes();},'danger'));
       row.children[2].classList.add('contact');
-      if (p.type==='Kid') row.children[2].querySelector('input').disabled=true;
       row.querySelector('button').setAttribute('aria-label','Remove '+(p.name||'person')); card.append(row);
     }
     card.append(button('Add person',()=>{h.members.push(newMember());renderSetup();})); box.append(card);
@@ -315,7 +355,7 @@ function validate() {
 }
 function draw() {
   if (matches && !confirm('Old links will still show old matches. Make sure everyone uses only the newest link.')) return;
-  const validation=validate(), result=validation?{error:validation}:drawPeople(people());
+  const validation=validate(), result=validation?{error:validation}:drawPeople(people(),Math.random,200,drawOptions);
   if (result.error) {$('error').textContent=result.error;return;}
   matches=result.assignments;
   const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let code;
@@ -324,6 +364,7 @@ function draw() {
 }
 function updateDrawView() {
   const ps=people();
+  $('rulesummary').textContent=drawRuleSummary();
   $('setupfields').disabled=Boolean(matches); $('peopledetails').open=!matches;
   $('setupsummary').textContent=matches ? `${ps.filter(p=>p.type==='Adult').length} adults, ${ps.filter(p=>p.type==='Kid').length} kids, ${households.length} households` : 'Add people and households';
   $('drawsection').hidden=Boolean(matches); $('delivery').hidden=!matches; $('redraw').hidden=!matches;
@@ -351,13 +392,7 @@ function renderDelivery() {
     const card=el('div',undefined,'card'), head=el('div',undefined,'row between');
     head.append(el('h3',p.name),el('span',sent.has(p.id)?'✓ Sent':opened.has(p.id)?'Message opened':'Ready to share',sent.has(p.id)?'sent':'muted')); card.append(head);
     const target=deliveryTarget(p,ps);
-    if(p.type==='Kid') {
-      const adults=ps.filter(a=>a.householdId===p.householdId&&a.type==='Adult');
-      if(adults.length>1) card.append(selectField('Adult receiving '+p.name+'\'s link',[['','Choose an adult'],...adults.map(a=>[String(a.id),a.name])],target?String(target.id):'',v=>{
-        originalPerson(p.id).parent=v;renderDelivery();
-      }));
-      card.append(el('p',target?`Send ${p.name}'s link to ${target.name}.`:adults.length?'Choose an adult in this household, or copy the link.':'No adult in this household. Copy the link to share it.','muted'));
-    }
+    if(p.type==='Kid') card.append(kidContactControl(p,true));
     const actions=el('div',undefined,'row'), kind=target?contactKind(target.contact):'';
     const templateError=messageTemplateError(p.type==='Kid'?kidMessage:adultMessage);
     if(kind){
@@ -381,7 +416,7 @@ function renderDelivery() {
 async function clearAll() {
   if(!confirm('Clear all people, contacts, links and unpublished idea edits from this tab? Published ideas and old links will still work.')) return;
   routeVersion++; households=[];matches=null;drawCode='';sent.clear();opened.clear();wishes=Object.create(null);extraNames=[];
-  sourceReady=false;newWishFile=false;
+  sourceReady=false;newWishFile=false;drawOptions={mixed:false,allowHousehold:false};
   ideasDirty=false;prepared='';hadPrepared=false;loading=false;loadFailed=false;adultMessage=adultDefault;kidMessage=kidDefault;organizer();
   await loadSavedWishes();
 }
@@ -391,16 +426,16 @@ function organizer() {
   <p class="muted">Setup and links stay in this tab only. Save your gift idea update on GitHub before closing.</p>
   <ol class="steps" aria-label="Exchange steps"><li id="step1">1. People</li><li id="step2">2. Draw</li><li id="step3">3. Send</li></ol></header>
   <section><details id="peopledetails" open><summary><span id="setupsummary">Add people and households</span></summary>
-  <p class="muted">Adults draw adults. Kids draw kids. Nobody draws their own household.</p>
-  <fieldset id="setupfields"><div id="households"></div><button type="button" id="addhouse">Add household</button></fieldset></details></section>
+  <p class="muted">Choose the draw rules, then add your people. Kids can use an adult contact from any household.</p>
+  <fieldset id="setupfields"><div id="drawsettings"></div><div id="households"></div><button type="button" id="addhouse">Add household</button></fieldset></details></section>
   <section id="drawsection"><h2>2. Draw names</h2><p class="muted">Matches stay hidden here, so you can join in too.</p><p id="error" role="alert"></p><button type="button" id="draw" class="primary">Draw names</button></section>
-  <section id="delivery" hidden><h2>3. Send the surprises</h2><p id="progress" role="status"></p>
+  <section id="delivery" hidden><h2>3. Send the surprises</h2><p id="rulesummary" class="muted"></p><p id="progress" role="status"></p>
   <p class="muted">Send each message in your messaging app, then come back and mark it sent. Opening a message or copying a link does not mark it sent.</p>
   <details><summary>Message settings</summary><div id="messages"></div><p id="messagewarning" class="error" role="alert"></p><p class="muted">Use {name}, {link} and {kid}. Keep {link} so people can open their match.</p></details><div id="sendrows"></div></section>
   <section><details id="gifts"><summary><h2>Gift ideas</h2></summary><p>Optional. You can add these now or later.</p>
   <p class="muted">One idea per line. Saved people load here automatically, without setting up a draw. Names and ideas are public; leave out private information. Renaming a participant keeps their draft ideas under the new name. Published names remain in the file so old recipient links still work.</p>
   <p id="loadnote" class="muted"></p><button id="retry" type="button" hidden>Retry loading saved ideas</button><div id="freshchoice" hidden><p class="muted">If you are starting from scratch, you can create a new file. Uploading it will replace all existing gift ideas.</p><button id="freshfile" type="button" class="danger">Start a new wish list file</button></div><div id="wishboxes"></div>
-  <details><summary>Add someone for gift ideas only</summary><label>Name<input id="giftname" autocomplete="off"></label><button type="button" id="addgift">Add person to gift ideas</button></details>
+  <details><summary>Add a wish list without entering the draw</summary><p class="muted">This adds gift ideas only. To include someone in the exchange, add them to a household in step 1.</p><label>Name<input id="giftname" autocomplete="off"></label><button type="button" id="addgift">Add person to gift ideas</button></details>
   <button type="button" id="generate" class="primary">Prepare wish list update</button><p id="wishstatus" role="status" aria-live="polite"></p>
   <div id="wishoutput" hidden><p>1. Download your update.</p><div class="row"><button type="button" id="download">Download wishlists.json</button><button type="button" id="copyjson">Copy update</button></div>
   <details><summary>View file contents</summary><label>Generated wishlists.json<textarea id="json" readonly></textarea></label></details>
@@ -421,7 +456,7 @@ function organizer() {
     extraNames.push(name); ideasDirty=true; invalidateWishOutput(); $('giftname').value=''; renderWishes();
   };
   $('retry').onclick=loadSavedWishes; $('freshfile').onclick=startNewWishFile;
-  renderSetup(); renderWishes(); updateDrawView(); updateLoadNote(); updateMessageWarnings();
+  renderDrawSettings();renderSetup(); renderWishes(); updateDrawView(); updateLoadNote(); updateMessageWarnings();
 }
 function updateLoadNote() {
   if(!$('loadnote'))return;
