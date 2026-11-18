@@ -1,1 +1,22 @@
-{ "people": {} }
+{
+  "people": {
+    "daveemail": {
+      "name": "DaveEmail",
+      "ideas": [
+        "Soap"
+      ]
+    },
+    "davephone": {
+      "name": "DavePhone",
+      "ideas": [
+        "Candle"
+      ]
+    },
+    "frankie": {
+      "name": "Frankie",
+      "ideas": [
+        "Tape"
+      ]
+    }
+  }
+}
