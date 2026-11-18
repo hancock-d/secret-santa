@@ -93,7 +93,7 @@ test('delivery URL formats and contact detection',()=>{
 });
 test('opening a message never marks it sent',()=>{
   const {context}=wishEditor(`households=[{id:1,name:'A',members:[{id:2,name:'Alex',type:'Adult',contact:'alex@example.com'}]}];`);
-  vm.runInContext(`location={origin:'https://example.com',pathname:'/santa/'};linkFor=()=> 'https://example.com/#/r/test';renderDelivery=()=>{};openMessage(people()[0],people()[0]);`,context);
+  vm.runInContext(`location={origin:'https://example.com',pathname:'/santa/'};linkFor=()=> 'https://example.com/#/r/test';renderDelivery=()=>{};launchMessageDraft=()=>{};openMessage(people()[0],people()[0]);`,context);
   assert.equal(vm.runInContext('sent.size',context),0);
   assert.equal(vm.runInContext('opened.has(2)',context),true);
 });
@@ -308,4 +308,114 @@ test('organizer draw uses mixed settings and keeps kid reveal identity',()=>{
   assert.equal(vm.runInContext('matches.length',context),3);
   const data=JSON.parse(vm.runInContext(`JSON.stringify(decode(linkFor(people()[0]).split('#/r/')[1]))`,context));
   assert.equal(data.g,'Jamie');assert.equal(data.k,'Jamie');assert.ok(['Alex','Blair'].includes(data.r));
+});
+
+for(const [kind,contact] of [['email','alex@example.com'],['text','5551234567']]) {
+  test(`${kind} draft opens separately without navigating or disabling exit warnings`,()=>{
+    const {context}=wishEditor(`households=[{id:1,name:'A',members:[{id:2,name:'Alex',type:'Adult',contact:${JSON.stringify(contact)}}]}];matches=[{giver:'Alex',receiver:'Blair'}];`);
+    let anchor,attached=false,removed=false,clicked=false;
+    context.document.createElement=tag=>{
+      assert.equal(tag,'a');
+      anchor={click(){assert.equal(attached,true);clicked=true;},remove(){removed=true;}};
+      return anchor;
+    };
+    context.document.body={append(node){assert.equal(node,anchor);attached=true;}};
+    vm.runInContext(`location={href:'https://example.com/santa/'};linkFor=()=> 'https://example.com/santa/#/r/test';renderDelivery=()=>{};openMessage(people()[0],people()[0]);`,context);
+    assert.equal(clicked,true);assert.equal(removed,true);
+    assert.equal(anchor.target,'_blank');assert.equal(anchor.rel,'noopener noreferrer');
+    assert.ok(anchor.href.startsWith(kind==='email'?'mailto:':'sms:'));
+    assert.ok(decodeURIComponent(anchor.href).includes('https://example.com/santa/#/r/test'));
+    assert.equal(vm.runInContext('location.href',context),'https://example.com/santa/');
+    assert.equal(vm.runInContext('needsWarning()',context),true);
+    assert.equal(vm.runInContext('sent.size',context),0);
+    assert.equal(vm.runInContext('opened.has(2)',context),true);
+  });
+}
+test('successful link copy shows confirmation only after clipboard resolves and resets it',async()=>{
+  const {context,nodes}=wishEditor('');
+  nodes.toast={hidden:true,textContent:''};
+  let finish, copied;const timers=new Map();let next=0;
+  context.setTimeout=fn=>{timers.set(++next,fn);return next;};
+  context.clearTimeout=id=>timers.delete(id);
+  context.navigator={clipboard:{writeText:text=>{copied=text;return new Promise(resolve=>finish=resolve);}}};
+  context.copyButton={textContent:'Copy link'};
+  const copying=vm.runInContext(`copy('https://example.com/#/r/test','status',copyButton)`,context);
+  assert.equal(nodes.toast.hidden,true);assert.equal(context.copyButton.textContent,'Copy link');
+  finish();await copying;
+  assert.equal(copied,'https://example.com/#/r/test');
+  assert.equal(nodes.toast.textContent,'Link copied');assert.equal(nodes.toast.hidden,false);
+  assert.equal(context.copyButton.textContent,'Link copied');assert.equal(vm.runInContext('sent.size',context),0);
+  for(const callback of timers.values())callback();
+  assert.equal(nodes.toast.hidden,true);assert.equal(context.copyButton.textContent,'Copy link');
+});
+test('clipboard failure shows manual-copy fallback without success confirmation',async()=>{
+  const {context,nodes}=wishEditor('');nodes.toast={hidden:true,textContent:''};
+  context.setTimeout=()=>1;context.clearTimeout=()=>{};
+  context.navigator={clipboard:{writeText:async()=>{throw Error('denied');}}};
+  let fallback,focused=false,selected=false;
+  context.document.createElement=()=>({setAttribute(){},focus(){focused=true;},select(){selected=true;}});
+  nodes.status.after=node=>fallback=node;
+  context.copyButton={textContent:'Copy link'};
+  await vm.runInContext(`copy('test-link','status',copyButton)`,context);
+  assert.equal(context.copyButton.textContent,'Copy link');
+  assert.equal(nodes.toast.textContent,'Could not copy automatically');
+  assert.equal(fallback.value,'test-link');assert.ok(focused&&selected);
+  assert.match(nodes.status.textContent,/did not work/);
+});
+function sharingEditor(setup='') {
+  return wishEditor(`households=[{id:1,name:'North',members:[{id:1,name:'Alex',type:'Adult',contact:''},{id:2,name:'Jamie',type:'Kid',parent:'3'}]},{id:2,name:'South',members:[{id:3,name:'Blair',type:'Adult',contact:'private@example.com'}]}];matches=[];drawCode='ABCD';linkFor=()=> 'https://example.com/santa/#/r/opaque';renderDelivery=()=>{};showToast=()=>{};${setup}`);
+}
+test('native sharing supplies the complete adult invitation and never marks it sent',async()=>{
+  const {context}=sharingEditor();let payload;
+  context.navigator={share:async data=>payload=data};
+  await vm.runInContext('shareInvitation(people()[0],null)',context);
+  assert.equal(payload.title,'Secret Santa for Alex');
+  assert.match(payload.text,/Hi Alex/);assert.match(payload.text,/#\/r\/opaque/);
+  assert.equal(vm.runInContext('sent.size',context),0);
+  assert.equal(vm.runInContext('opened.has(1)',context),true);
+});
+test('kid sharing addresses the selected adult without exposing their contact',async()=>{
+  const {context}=sharingEditor();let payload;
+  context.navigator={share:async data=>payload=data};
+  await vm.runInContext('shareInvitation(people()[1],deliveryTarget(people()[1],people()))',context);
+  assert.match(payload.text,/Hi Blair/);assert.match(payload.text,/Jamie.s Secret Santa/);
+  assert.ok(!JSON.stringify(payload).includes('private@example.com'));
+});
+test('unsupported sharing copies the invitation rather than only its link',async()=>{
+  const {context,nodes}=sharingEditor();let copied;
+  context.navigator={clipboard:{writeText:async text=>copied=text}};
+  await vm.runInContext('shareInvitation(people()[0],null)',context);
+  assert.match(copied,/Hi Alex/);assert.match(copied,/#\/r\/opaque/);
+  assert.equal(nodes.status.textContent,'Invitation copied');
+  assert.equal(vm.runInContext('opened.size+sent.size',context),0);
+});
+test('canceling native sharing does not copy or mark anything sent',async()=>{
+  const {context,nodes}=sharingEditor();let copied=false;
+  context.navigator={share:async()=>{throw {name:'AbortError'};},clipboard:{writeText:async()=>copied=true}};
+  await vm.runInContext('shareInvitation(people()[0],null)',context);
+  assert.equal(copied,false);assert.equal(vm.runInContext('opened.size+sent.size',context),0);
+  assert.match(nodes.status.textContent,/canceled/);assert.equal(vm.runInContext('shareBusy',context),false);
+});
+test('blocked sharing falls back to clipboard with accurate feedback',async()=>{
+  const {context,nodes}=sharingEditor();let copied;
+  context.navigator={share:async()=>{throw {name:'NotAllowedError'};},clipboard:{writeText:async text=>copied=text}};
+  await vm.runInContext('shareInvitation(people()[0],null)',context);
+  assert.match(copied,/Hi Alex/);assert.equal(nodes.status.textContent,'Invitation copied instead');
+  assert.equal(vm.runInContext('sent.size',context),0);
+});
+test('sharing checks unsupported payloads before opening native share',async()=>{
+  const {context}=sharingEditor();let shared=false,copied=false;
+  context.navigator={canShare:()=>false,share:async()=>shared=true,clipboard:{writeText:async()=>copied=true}};
+  await vm.runInContext('shareInvitation(people()[0],null)',context);
+  assert.equal(shared,false);assert.equal(copied,true);
+});
+test('pending shares cannot duplicate or update a newer draw',async()=>{
+  const {context}=sharingEditor();let resolve,count=0;
+  context.navigator={share:()=>{count++;return new Promise(done=>resolve=done);}};
+  const pending=vm.runInContext('shareInvitation(people()[0],null)',context);
+  await vm.runInContext('shareInvitation(people()[1],null)',context);
+  assert.equal(count,1);
+  vm.runInContext("drawCode='EFGH';matches=[];",context);resolve();await pending;
+  assert.equal(vm.runInContext('opened.size+sent.size',context),0);
+  assert.equal(vm.runInContext('shareBusy',context),false);
 });

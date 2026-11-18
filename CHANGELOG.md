@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.3.0 (2026-11-18)
+
+- Add Share invitation with a complete personalized message and private reveal link.
+- Fall back to Copy invitation on unsupported browsers or sharing failures.
+- Keep canceled shares unchanged and never mark an invitation sent automatically.
+- Address kid invitations to their chosen adult without sharing contact details.
+- Rename send shortcuts to Open text draft and Open email draft to clarify their behavior.
+- Explain that sharing requires choosing a recipient, while drafts prefill the saved contact.
+
+Validation: 51 Node tests passed, covering native sharing, cancellation, copy fallback,
+parent addressing and pending-share safeguards. No browser, screen or audio access was
+used. Native share menus and messaging apps still require a real-device check.
+
+## 1.2.2 (2026-11-18)
+
+- Show a brief Link copied popup and change the clicked button label after a successful copy.
+- Show Update copied for wish list copies and an honest fallback when clipboard access fails.
+- Keep sent status unchanged and ignore clipboard results after switching views or clearing setup.
+
+Validation: 44 Node tests passed, including clipboard success and failure. No browser,
+screen or audio access was used; device clipboard behavior remains unverified.
+
+## 1.2.1 (2026-11-18)
+
+- Open email and text drafts in a separate browsing context instead of navigating the organizer page.
+- Keep the unsent-link and unpublished-idea exit warnings active.
+- Explain the external messaging handoff and offer Copy link if no app opens.
+
+Validation: all 42 Node tests passed, including email and SMS launch targets,
+unchanged organizer location, and preserved exit warnings. No browser, screen or
+audio access was used. Real-device messaging handoff remains unverified.
+
 ## 1.2.0 (2026-11-18)
 
 - Replace the disabled kid contact field with an adult selector during setup.
