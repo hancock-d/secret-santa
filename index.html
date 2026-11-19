@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="data:,">
-<meta name="application-version" content="1.3.0">
+<meta name="application-version" content="1.3.2">
 <title>Family Secret Santa</title>
 <style>
 :root{color-scheme:light;--ink:#233e35;--green:#285b48;--paper:#fbf8f1;--line:#dcded4;--red:#963f39}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.5 system-ui,sans-serif}main{max-width:820px;margin:auto;padding:32px 18px 70px}header{padding:12px 0 24px;border-bottom:1px solid var(--line)}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;color:var(--red)}h1{font-family:Georgia,serif;font-weight:normal;font-size:clamp(36px,7vw,54px);line-height:1.12;margin:12px 0}h2{font-size:24px;margin:0 0 10px}h3{font-size:19px;margin:0}p{margin:10px 0}section{margin-top:28px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:14px 0}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.between{justify-content:space-between}.muted,small{color:#58685f;font-size:14px}label{display:block;font-size:14px;font-weight:650;margin:10px 0}input,select,textarea,button{font:inherit}input,select,textarea{display:block;width:100%;padding:12px;border:1px solid #aab8ae;border-radius:8px;color:var(--ink);background:#fff;margin-top:5px}textarea{min-height:100px;resize:vertical}button{min-height:46px;padding:10px 17px;border:1px solid var(--green);border-radius:8px;color:var(--green);background:white;cursor:pointer;font-weight:650}button.primary{background:var(--green);color:#fff}button.danger{color:var(--red);border-color:#d1a9a5}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #ba8c3e;outline-offset:3px}.member{border-top:1px solid var(--line);padding:12px 0;display:grid;grid-template-columns:2fr 1fr;gap:0 12px}.member .contact{grid-column:1/-1}.member button{justify-self:start}#error{color:var(--red);font-weight:650}#status{min-height:24px}.reveal{max-width:570px;margin:9vh auto;text-align:center;padding:35px 24px}.reveal h1{font-size:46px;overflow-wrap:anywhere}.reveal ul{text-align:left;padding-left:24px}.reveal li{padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.sent{color:var(--green);font-weight:700}#json{font:13px/1.5 ui-monospace,monospace;min-height:180px}[hidden]{display:none!important}@media(min-width:640px){.member{grid-template-columns:2fr 1fr 2fr auto;align-items:end}.member .contact{grid-column:auto}.member button{margin-bottom:10px}}
@@ -121,7 +121,7 @@ function deliveryUrl(contact, message) {
 </script>
 <script>
 'use strict';
-const VERSION = '1.3.0';
+const VERSION = '1.3.2';
 const app = document.getElementById('app');
 const adultDefault = 'Hi {name}, here is your private Secret Santa link: {link}  Please keep it to yourself!';
 const kidDefault = "Hi {name}, this link is for {kid}'s Secret Santa: {link}  Please keep it a surprise!";
@@ -299,7 +299,7 @@ function invalidateWishOutput() {
 function renderWishes() {
   const box=$('wishboxes'); if(!box) return; box.replaceChildren();
   const names=giftNames();
-  if (!names.length) box.append(el('p','Add a person below or enter people in step 1.','muted'));
+  if (!names.length) box.append(el('p','Add your family in step 1 to see their gift idea boxes here. Already drew names? Open “Someone missing?” below.','muted'));
   for (const name of names) box.append(field('Gift ideas for '+name,wishText(name),v=>{
     editIdeas(name,v);
   },'textarea'));
@@ -449,9 +449,10 @@ function renderDelivery() {
   $('progress').className=sent.size===ps.length?'complete':'notice';
   for (const p of ps) {
     const card=el('div',undefined,'card'), head=el('div',undefined,'row between');
-    head.append(el('h3',p.name),el('span',sent.has(p.id)?'✓ Sent':opened.has(p.id)?'Message opened':'Ready to share',sent.has(p.id)?'sent':'muted')); card.append(head);
+    head.append(el('h3',p.name+"’s invitation"),el('span',sent.has(p.id)?'✓ Sent':opened.has(p.id)?'Message opened':'Ready to share',sent.has(p.id)?'sent':'muted')); card.append(head);
     const target=deliveryTarget(p,ps);
-    if(p.type==='Kid') card.append(kidContactControl(p,true));
+    if(target) card.append(el('p','Send to '+target.name));
+    else card.append(kidContactControl(p,true));
     const actions=el('div',undefined,'row'), kind=target?contactKind(target.contact):'';
     const templateError=messageTemplateError(p.type==='Kid'?kidMessage:adultMessage);
     const share=button(typeof navigator.share==='function'?'Share invitation':'Copy invitation',()=>shareInvitation(p,target),'primary');
@@ -465,6 +466,11 @@ function renderDelivery() {
     actions.append(button(sent.has(p.id)?'Undo sent':'Mark sent',()=>{
       sent.has(p.id)?sent.delete(p.id):sent.add(p.id);renderDelivery();
     })); card.append(actions);
+    if(p.type==='Kid' && target){
+      const change=el('details',undefined,'contact-edit');
+      change.append(el('summary','Change receiving adult'),kidContactControl(p,true));
+      card.append(change);
+    }
     if(templateError)card.append(el('p','Open Message settings and add {link} to the '+(p.type==='Kid'?'kid':'adult')+' message. Copy link still works.','error'));
     if(!kind) card.append(el('p',target?'Add a phone or email below, or use Copy link.':'Copy link works without a contact.','muted'));
     if(target) {
@@ -497,7 +503,7 @@ function organizer() {
   <section><details id="gifts"><summary><h2>Gift ideas</h2></summary><p>Optional. You can add these now or later.</p>
   <p class="muted">One idea per line. Saved people load here automatically, without setting up a draw. Names and ideas are public; leave out private information. Renaming a participant keeps their draft ideas under the new name. Published names remain in the file so old recipient links still work.</p>
   <p id="loadnote" class="muted"></p><button id="retry" type="button" hidden>Retry loading saved ideas</button><div id="freshchoice" hidden><p class="muted">If you are starting from scratch, you can create a new file. Uploading it will replace all existing gift ideas.</p><button id="freshfile" type="button" class="danger">Start a new wish list file</button></div><div id="wishboxes"></div>
-  <details><summary>Add a wish list without entering the draw</summary><p class="muted">This adds gift ideas only. To include someone in the exchange, add them to a household in step 1.</p><label>Name<input id="giftname" autocomplete="off"></label><button type="button" id="addgift">Add person to gift ideas</button></details>
+  <details id="missingperson"><summary>Someone missing?</summary><p class="muted">Use the same name as their original draw. This does not change any matches.</p><label>Name from the draw<input id="giftname" autocomplete="off"></label><button type="button" id="addgift">Add a person’s gift ideas</button></details>
   <button type="button" id="generate" class="primary">Prepare wish list update</button><p id="wishstatus" role="status" aria-live="polite"></p>
   <div id="wishoutput" hidden><p>1. Download your update.</p><div class="row"><button type="button" id="download">Download wishlists.json</button><button type="button" id="copyjson">Copy update</button></div>
   <details><summary>View file contents</summary><label>Generated wishlists.json<textarea id="json" readonly></textarea></label></details>
@@ -516,6 +522,8 @@ function organizer() {
     if(!id){$('wishstatus').textContent='Enter a name with letters or numbers.';return;}
     if(giftNames().some(n=>slug(n)===id)){$('wishstatus').textContent='This person already has a gift idea box above.';return;}
     extraNames.push(name); ideasDirty=true; invalidateWishOutput(); $('giftname').value=''; renderWishes();
+    $('missingperson').open=false;
+    $('wishboxes').lastElementChild.querySelector('textarea').focus();
   };
   $('retry').onclick=loadSavedWishes; $('freshfile').onclick=startNewWishFile;
   renderDrawSettings();renderSetup(); renderWishes(); updateDrawView(); updateLoadNote(); updateMessageWarnings();

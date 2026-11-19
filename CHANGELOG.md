@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2 (2026-11-18)
+
+- Show whose invitation is being shared and the intended recipient directly above the sharing actions. A kid’s receiving adult can be changed on the card.
+
+## 1.3.1 (2026-11-18)
+
+- Put late gift idea entry under “Someone missing?” and focus the new idea box after adding the name from the original draw.
+
 ## 1.3.0 (2026-11-18)
 
 - Add Share invitation with a complete personalized message and private reveal link.

@@ -1,4 +1,4 @@
-# Family Secret Santa v1.3.0
+# Family Secret Santa v1.3.2
 For upgrades, upload the current index.html, README.md, CHANGELOG.md and tests folder; keep your existing wishlists.json.
 In Settings > Pages, select Deploy from a branch, `main` and `/ (root)`, then Save.
 Open https://hancock-d.github.io/secret-santa/ after deployment finishes.
